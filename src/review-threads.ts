@@ -222,12 +222,15 @@ export function clearThreads(): void {
 export function resolveThread(thread: vscode.CommentThread): void {
   thread.label = '✅ Resolved'
   thread.contextValue = 'resolved'
+  // Drives the Comments panel's Show Resolved / Show Unresolved filter.
+  thread.state = vscode.CommentThreadState.Resolved
   thread.collapsibleState = vscode.CommentThreadCollapsibleState.Collapsed
 }
 
 export function unresolveThread(thread: vscode.CommentThread): void {
   thread.label = 'Open'
   thread.contextValue = 'open'
+  thread.state = vscode.CommentThreadState.Unresolved
   thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded
 }
 
