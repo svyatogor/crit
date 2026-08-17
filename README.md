@@ -292,6 +292,7 @@ Copy-Item "out\extension.js" "$HOME\.vscode\extensions\svyatogor.crit-0.1.0\out\
 
 | Version | Highlights |
 |---|---|
+| **0.4.1** | Request a review from the Source Control view — the whole diff from its title bar, or one changed file inline |
 | **0.4.0** | AI-authored reviews — `Crit: Ask AI to Review Changes`, the `addDiffComment` MCP tool, and the project code that addresses a window before any comment exists |
 | **0.1.3** | Git diff context in prompts — AI sees what changed, not just current code |
 | **0.1.2** | Branch-scoped comment persistence — comments follow repo + branch, inherit on new branches |
