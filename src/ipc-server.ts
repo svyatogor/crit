@@ -57,7 +57,7 @@ function registerIpcInstance(port: number, log: vscode.OutputChannel): Registere
         // here bounds the directory to roughly the number of live windows.
         const removed = sweepIpcRegistry(registryDir);
         if (removed > 0) {
-            log.appendLine(`[Diff Review] Swept ${removed} stale IPC descriptor(s)`);
+            log.appendLine(`[Crit] Swept ${removed} stale IPC descriptor(s)`);
         }
         fs.writeFileSync(tempPath, JSON.stringify(descriptor), { encoding: 'utf-8', flag: 'wx' });
         fs.renameSync(tempPath, descriptorPath);

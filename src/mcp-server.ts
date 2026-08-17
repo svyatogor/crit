@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * MCP Server for Diff Review.
+ * MCP Server for Crit.
  * Connects to the VS Code extension's IPC HTTP server to list, reply, resolve,
  * and delete inline review comments.
  *
  * Usage: node mcp-server.js
- * The target extension instance is selected by a Diff Review diagnostic code.
+ * The target extension instance is selected by a Crit diagnostic code.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -36,9 +36,9 @@ function resolveIpcRoute(code: string): IpcRoute {
     const metadata = parseDiagnosticMetadata(code);
     if (!metadata) {
         throw new Error(
-            'Malformed Diff Review diagnostic code. Expected the full code ' +
-            '`diff-review:v1;<session>;<project>;<thread>`, each an 8-character hex ref. ' +
-            'Copy a current code from a Diff Review diagnostic and try again.'
+            'Malformed Crit diagnostic code. Expected the full code ' +
+            '`crit:v1;<session>;<project>;<thread>`, each an 8-character hex ref. ' +
+            'Copy a current code from a Crit diagnostic and try again.'
         );
     }
 
@@ -80,12 +80,12 @@ async function ipcRequest(
     } catch (error: unknown) {
         if (!response.ok) {
             throw new Error(
-                `Diff Review IPC ${method} ${endpoint} failed with HTTP ${response.status}: ` +
+                `Crit IPC ${method} ${endpoint} failed with HTTP ${response.status}: ` +
                 (responseText || errorMessage(error))
             );
         }
         throw new Error(
-            `Diff Review IPC protocol error: ${method} ${endpoint} returned invalid JSON ` +
+            `Crit IPC protocol error: ${method} ${endpoint} returned invalid JSON ` +
             `(${errorMessage(error)}).`
         );
     }
@@ -93,7 +93,7 @@ async function ipcRequest(
     if (!response.ok) {
         throw responseError(
             result,
-            `Diff Review IPC ${method} ${endpoint} failed with HTTP ${response.status}`
+            `Crit IPC ${method} ${endpoint} failed with HTTP ${response.status}`
         );
     }
     return result;
@@ -109,7 +109,7 @@ function isTimeout(error: unknown): boolean {
 
 function timeoutError(route: IpcRoute): Error {
     return new Error(
-        `Diff Review IPC request timed out after ${IPC_TIMEOUT_MS / 1000} seconds for session ` +
+        `Crit IPC request timed out after ${IPC_TIMEOUT_MS / 1000} seconds for session ` +
         `${route.metadata.sessionRef}. The instance descriptor may be stale; ensure that the ` +
         'matching VS Code window is running.'
     );
@@ -123,7 +123,7 @@ function connectionError(route: IpcRoute, error: unknown): Error {
         ? `${errorMessage(error)} (${cause.message})`
         : errorMessage(error);
     return new Error(
-        `Could not connect to Diff Review session ${route.metadata.sessionRef} on ` +
+        `Could not connect to Crit session ${route.metadata.sessionRef} on ` +
         `127.0.0.1:${route.port}: ${detail}. The instance descriptor may be stale; ` +
         'ensure that the matching VS Code window is running.'
     );
@@ -143,7 +143,7 @@ function errorMessage(error: unknown): string {
 // ---------- MCP Server ----------
 
 const server = new McpServer({
-    name: 'diff-review',
+    name: 'crit',
     version: '0.1.0',
 });
 
@@ -153,9 +153,9 @@ const registerTool: any = server.tool.bind(server);
 // Tool 1: List comments
 registerTool(
     'listDiffComments',
-    'List inline review comments for the project identified by a Diff Review diagnostic code',
+    'List inline review comments for the project identified by a Crit diagnostic code',
     {
-        code: z.string().describe('Full Diff Review diagnostic code used to select the VS Code instance and project'),
+        code: z.string().describe('Full Crit diagnostic code used to select the VS Code instance and project'),
     },
     async ({ code }: { code: string }) => {
         try {
@@ -163,7 +163,7 @@ registerTool(
             const endpoint = `/comments?projectRef=${encodeURIComponent(route.metadata.projectRef)}`;
             const state = await ipcGet(route, endpoint);
             if (!state || !Array.isArray(state.threads)) {
-                throw new Error('Diff Review IPC protocol error: comments response is missing the threads array.');
+                throw new Error('Crit IPC protocol error: comments response is missing the threads array.');
             }
             if (state.threads.length === 0) {
                 return { content: [{ type: 'text' as const, text: 'No review comments.' }] };
@@ -171,7 +171,7 @@ registerTool(
             const lines = state.threads.map((thread: any, index: number) => {
                 if (!thread || typeof thread.threadRef !== 'string') {
                     throw new Error(
-                        `Diff Review IPC protocol error: returned thread at index ${index} is missing a valid threadRef.`
+                        `Crit IPC protocol error: returned thread at index ${index} is missing a valid threadRef.`
                     );
                 }
 
@@ -185,14 +185,14 @@ registerTool(
                     });
                 } catch {
                     throw new Error(
-                        `Diff Review IPC protocol error: returned thread at index ${index} has invalid ` +
+                        `Crit IPC protocol error: returned thread at index ${index} has invalid ` +
                         `threadRef ${JSON.stringify(thread.threadRef)}.`
                     );
                 }
 
                 if (!Array.isArray(thread.comments)) {
                     throw new Error(
-                        `Diff Review IPC protocol error: thread ${thread.threadRef} is missing the comments array.`
+                        `Crit IPC protocol error: thread ${thread.threadRef} is missing the comments array.`
                     );
                 }
                 const comments = thread.comments
@@ -213,7 +213,7 @@ registerTool(
     'replyToDiffComment',
     'Reply to an existing inline review comment thread as the agent role',
     {
-        code: z.string().describe('Full Diff Review diagnostic code for the target thread'),
+        code: z.string().describe('Full Crit diagnostic code for the target thread'),
         text: z.string().describe('The reply text'),
     },
     async ({ code, text }: { code: string; text: string }) => {
@@ -232,7 +232,7 @@ registerTool(
     'resolveDiffComment',
     'Mark an inline review comment as resolved/done',
     {
-        code: z.string().describe('Full Diff Review diagnostic code for the target thread'),
+        code: z.string().describe('Full Crit diagnostic code for the target thread'),
     },
     async ({ code }: { code: string }) => {
         try {
@@ -250,7 +250,7 @@ registerTool(
     'deleteDiffComment',
     'Delete an inline review comment thread entirely',
     {
-        code: z.string().describe('Full Diff Review diagnostic code for the target thread'),
+        code: z.string().describe('Full Crit diagnostic code for the target thread'),
     },
     async ({ code }: { code: string }) => {
         try {

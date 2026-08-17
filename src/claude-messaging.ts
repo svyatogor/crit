@@ -125,12 +125,12 @@ export function sendMessageToSocket(
         socket.on('close', () => settle());
 
         socket.on('error', (error: Error) => settle(new Error(
-            `Could not deliver a Diff Review message to ${socketPath}: ${error.message}. ` +
+            `Could not deliver a Crit message to ${socketPath}: ${error.message}. ` +
             'The Claude Code session may have exited.',
         )));
 
         socket.setTimeout(timeoutMs, () => settle(new Error(
-            `Timed out after ${timeoutMs}ms delivering a Diff Review message to ${socketPath}.`,
+            `Timed out after ${timeoutMs}ms delivering a Crit message to ${socketPath}.`,
         )));
     });
 }

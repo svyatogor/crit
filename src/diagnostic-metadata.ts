@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'crypto';
 
-export const DIFF_REVIEW_DIAGNOSTIC_SOURCE = 'Diff Review';
+export const CRIT_DIAGNOSTIC_SOURCE = 'Crit';
 
-export const DIFF_REVIEW_DIAGNOSTIC_VERSION = 1 as const;
+export const CRIT_DIAGNOSTIC_VERSION = 1 as const;
 
-export interface DiffReviewDiagnosticMetadata {
-    version: typeof DIFF_REVIEW_DIAGNOSTIC_VERSION;
+export interface CritDiagnosticMetadata {
+    version: typeof CRIT_DIAGNOSTIC_VERSION;
     sessionRef: string;
     projectRef: string;
     threadRef: string;
@@ -25,11 +25,11 @@ export interface DiffReviewDiagnosticMetadata {
 const REF_PATTERN = /^[0-9a-f]{8}$/;
 const REF_HEX_LENGTH = 8;
 
-// Diagnostics render as `R3 diff-review:v1;…`, and agents copy the whole
+// Diagnostics render as `R3 crit:v1;…`, and agents copy the whole
 // string. Accept an optional leading `R<n>` label so a pasted diagnostic code
 // resolves without the caller having to strip it first.
 const DIAGNOSTIC_CODE_PATTERN =
-    /^(?:R\d+\s+)?diff-review:v(\d+);([0-9a-f]{8});([0-9a-f]{8});([0-9a-f]{8})$/;
+    /^(?:R\d+\s+)?crit:v(\d+);([0-9a-f]{8});([0-9a-f]{8});([0-9a-f]{8})$/;
 
 export function createSessionRef(): string {
     return createRandomRef();
@@ -51,21 +51,21 @@ export function isRef(value: string): boolean {
     return REF_PATTERN.test(value);
 }
 
-export function encodeDiagnosticMetadata(metadata: DiffReviewDiagnosticMetadata): string {
+export function encodeDiagnosticMetadata(metadata: CritDiagnosticMetadata): string {
     validateMetadata(metadata);
     // Positional, not labelled: `session=`/`project=`/`thread=` cost 24 chars
     // and add nothing, since order already fixes the meaning.
-    return `diff-review:v${metadata.version};${metadata.sessionRef};${metadata.projectRef};${metadata.threadRef}`;
+    return `crit:v${metadata.version};${metadata.sessionRef};${metadata.projectRef};${metadata.threadRef}`;
 }
 
-export function parseDiagnosticMetadata(code: string): DiffReviewDiagnosticMetadata | undefined {
+export function parseDiagnosticMetadata(code: string): CritDiagnosticMetadata | undefined {
     const match = DIAGNOSTIC_CODE_PATTERN.exec(code);
     if (!match) return undefined;
 
     const version = Number(match[1]);
-    if (version !== DIFF_REVIEW_DIAGNOSTIC_VERSION) return undefined;
+    if (version !== CRIT_DIAGNOSTIC_VERSION) return undefined;
 
-    const metadata: DiffReviewDiagnosticMetadata = {
+    const metadata: CritDiagnosticMetadata = {
         version,
         sessionRef: match[2],
         projectRef: match[3],
@@ -84,17 +84,17 @@ function createRandomRef(): string {
     return randomUUID().replace(/-/g, '').slice(0, REF_HEX_LENGTH);
 }
 
-function validateMetadata(metadata: DiffReviewDiagnosticMetadata): void {
-    if (metadata.version !== DIFF_REVIEW_DIAGNOSTIC_VERSION) {
+function validateMetadata(metadata: CritDiagnosticMetadata): void {
+    if (metadata.version !== CRIT_DIAGNOSTIC_VERSION) {
         throw new Error(`Unsupported diagnostic metadata version: ${metadata.version}`);
     }
     if (!isRef(metadata.sessionRef)) {
-        throw new Error('Invalid Diff Review session reference.');
+        throw new Error('Invalid Crit session reference.');
     }
     if (!isRef(metadata.projectRef)) {
-        throw new Error('Invalid Diff Review project reference.');
+        throw new Error('Invalid Crit project reference.');
     }
     if (!isRef(metadata.threadRef)) {
-        throw new Error('Invalid Diff Review thread reference.');
+        throw new Error('Invalid Crit thread reference.');
     }
 }

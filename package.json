@@ -1,9 +1,9 @@
 {
-  "name": "diff-review",
-  "displayName": "Diff Review with AI Agent",
-  "description": "Inline code review comments — review AI-generated changes, submit feedback in batch to Copilot, Claude Code, or any AI agent, with git diff context",
+  "name": "crit",
+  "displayName": "Crit",
+  "description": "Crit — pair review with your AI. Inline code review comments — review AI-generated changes, submit feedback in batch to Copilot, Claude Code, or any AI agent, with git diff context",
   "version": "0.3.0",
-  "publisher": "JinqiShen",
+  "publisher": "Sergey Kuleshov",
   "icon": "icon.png",
   "repository": {
     "type": "git",
@@ -34,9 +34,9 @@
   "main": "./out/extension.js",
   "contributes": {
     "configuration": {
-      "title": "Diff Review",
+      "title": "Crit",
       "properties": {
-        "diffReview.aiProvider": {
+        "crit.aiProvider": {
           "type": "string",
           "enum": [
             "copilot",
@@ -48,156 +48,156 @@
           ],
           "default": "copilot",
           "scope": "window",
-          "description": "AI provider used by Diff Review's Send to AI actions."
+          "description": "AI provider used by Crit's Send to AI actions."
         }
       }
     },
     "commands": [
       {
-        "command": "diffReview.createNote",
+        "command": "crit.createNote",
         "title": "Add Comment",
         "icon": "$(check)"
       },
       {
-        "command": "diffReview.reply",
+        "command": "crit.reply",
         "title": "Reply",
         "icon": "$(reply)"
       },
       {
-        "command": "diffReview.editComment",
+        "command": "crit.editComment",
         "title": "Edit",
         "icon": "$(edit)"
       },
       {
-        "command": "diffReview.saveEdit",
+        "command": "crit.saveEdit",
         "title": "Save",
         "icon": "$(check)"
       },
       {
-        "command": "diffReview.cancelEdit",
+        "command": "crit.cancelEdit",
         "title": "Cancel",
         "icon": "$(close)"
       },
       {
-        "command": "diffReview.deleteNote",
+        "command": "crit.deleteNote",
         "title": "Delete",
         "icon": "$(trash)"
       },
       {
-        "command": "diffReview.sendThread",
+        "command": "crit.sendThread",
         "title": "Send to AI",
         "icon": "$(send)"
       },
       {
-        "command": "diffReview.resolve",
+        "command": "crit.resolve",
         "title": "Resolve",
         "icon": "$(check-all)"
       },
       {
-        "command": "diffReview.unresolve",
+        "command": "crit.unresolve",
         "title": "Reopen",
         "icon": "$(debug-restart)"
       },
       {
-        "command": "diffReview.showPanel",
-        "title": "Diff Review: Show Comments Panel",
+        "command": "crit.showPanel",
+        "title": "Crit: Show Comments Panel",
         "icon": "$(comment-discussion)"
       },
       {
-        "command": "diffReview.submitAll",
-        "title": "Diff Review: Send All to AI",
+        "command": "crit.submitAll",
+        "title": "Crit: Send All to AI",
         "icon": "$(send)"
       },
       {
-        "command": "diffReview.resolveAll",
-        "title": "Diff Review: Resolve All",
+        "command": "crit.resolveAll",
+        "title": "Crit: Resolve All",
         "icon": "$(check-all)"
       },
       {
-        "command": "diffReview.deleteResolved",
-        "title": "Diff Review: Delete All Resolved",
+        "command": "crit.deleteResolved",
+        "title": "Crit: Delete All Resolved",
         "icon": "$(trash)"
       },
       {
-        "command": "diffReview.clearAll",
-        "title": "Diff Review: Clear All Comments",
+        "command": "crit.clearAll",
+        "title": "Crit: Clear All Comments",
         "icon": "$(clear-all)"
       },
       {
-        "command": "diffReview.copyThread",
+        "command": "crit.copyThread",
         "title": "Copy to Clipboard",
         "icon": "$(clippy)"
       },
       {
-        "command": "diffReview.copyAll",
-        "title": "Diff Review: Copy All to Clipboard",
+        "command": "crit.copyAll",
+        "title": "Crit: Copy All to Clipboard",
         "icon": "$(clippy)"
       }
     ],
     "menus": {
       "comments/commentThread/context": [
         {
-          "command": "diffReview.createNote",
+          "command": "crit.createNote",
           "group": "inline",
-          "when": "commentController == diffReview && commentThreadIsEmpty"
+          "when": "commentController == crit && commentThreadIsEmpty"
         },
         {
-          "command": "diffReview.reply",
+          "command": "crit.reply",
           "group": "inline",
-          "when": "commentController == diffReview && !commentThreadIsEmpty"
+          "when": "commentController == crit && !commentThreadIsEmpty"
         }
       ],
       "comments/comment/title": [
         {
-          "command": "diffReview.editComment",
+          "command": "crit.editComment",
           "group": "inline@1",
-          "when": "commentController == diffReview && comment == userComment"
+          "when": "commentController == crit && comment == userComment"
         },
         {
-          "command": "diffReview.deleteNote",
+          "command": "crit.deleteNote",
           "group": "inline@2",
-          "when": "commentController == diffReview"
+          "when": "commentController == crit"
         }
       ],
       "comments/comment/context": [
         {
-          "command": "diffReview.saveEdit",
+          "command": "crit.saveEdit",
           "group": "inline@1",
-          "when": "commentController == diffReview"
+          "when": "commentController == crit"
         },
         {
-          "command": "diffReview.cancelEdit",
+          "command": "crit.cancelEdit",
           "group": "inline@2",
-          "when": "commentController == diffReview"
+          "when": "commentController == crit"
         }
       ],
       "comments/commentThread/title": [
         {
-          "command": "diffReview.sendThread",
+          "command": "crit.sendThread",
           "group": "inline@1",
-          "when": "commentController == diffReview && !commentThreadIsEmpty"
+          "when": "commentController == crit && !commentThreadIsEmpty"
         },
         {
-          "command": "diffReview.copyThread",
+          "command": "crit.copyThread",
           "group": "inline@2",
-          "when": "commentController == diffReview && !commentThreadIsEmpty"
+          "when": "commentController == crit && !commentThreadIsEmpty"
         },
         {
-          "command": "diffReview.resolve",
+          "command": "crit.resolve",
           "group": "inline@2",
-          "when": "commentController == diffReview && commentThread == open"
+          "when": "commentController == crit && commentThread == open"
         },
         {
-          "command": "diffReview.unresolve",
+          "command": "crit.unresolve",
           "group": "inline@2",
-          "when": "commentController == diffReview && commentThread == resolved"
+          "when": "commentController == crit && commentThread == resolved"
         }
       ]
     },
     "languageModelTools": [
       {
-        "name": "diffReview_listComments",
-        "displayName": "List Diff Review Comments",
+        "name": "crit_listComments",
+        "displayName": "List Crit Comments",
         "toolReferenceName": "listDiffComments",
         "icon": "$(comment)",
         "modelDescription": "Lists all inline review comments with their IDs, file locations, status (open/resolved), and full thread text including user and agent replies. Use this to see what review feedback exists.",
@@ -208,8 +208,8 @@
         }
       },
       {
-        "name": "diffReview_replyToComment",
-        "displayName": "Reply to Diff Review Comment",
+        "name": "crit_replyToComment",
+        "displayName": "Reply to Crit Comment",
         "toolReferenceName": "replyToDiffComment",
         "icon": "$(reply)",
         "modelDescription": "Reply to an existing inline review comment thread. Use this to respond to user feedback on code changes, explain your reasoning, or acknowledge a requested change. The reply appears as an agent message in the comment thread.",
@@ -233,8 +233,8 @@
         }
       },
       {
-        "name": "diffReview_resolveComment",
-        "displayName": "Resolve Diff Review Comment",
+        "name": "crit_resolveComment",
+        "displayName": "Resolve Crit Comment",
         "toolReferenceName": "resolveDiffComment",
         "icon": "$(check)",
         "modelDescription": "Mark an inline review comment as resolved/done. Use this after you have addressed the feedback in the comment — e.g., after making the requested code change.",
@@ -253,8 +253,8 @@
         }
       },
       {
-        "name": "diffReview_deleteComment",
-        "displayName": "Delete Diff Review Comment",
+        "name": "crit_deleteComment",
+        "displayName": "Delete Crit Comment",
         "toolReferenceName": "deleteDiffComment",
         "icon": "$(trash)",
         "modelDescription": "Delete an inline review comment thread entirely. Use this only when explicitly asked to remove a comment.",

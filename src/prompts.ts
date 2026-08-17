@@ -37,7 +37,7 @@ export function buildNudgeMessage(
     source: 'diagnostics' | 'mcp',
 ): string {
     const count = threads.length;
-    const subject = `${count} Diff Review comment${count === 1 ? '' : 's'} ${count === 1 ? 'is' : 'are'} ready`;
+    const subject = `${count} Crit comment${count === 1 ? '' : 's'} ${count === 1 ? 'is' : 'are'} ready`;
     // Comments spread across several workspace roots would need one code per
     // root; the first thread's code covers the usual single-root case.
     const code = diagnosticCode(threads[0]);
@@ -50,7 +50,7 @@ export function buildNudgeMessage(
         // — so the agent matches what it actually reads. Must stay one line:
         // sendText submits on every newline.
         return `${subject} in this workspace. Call getDiagnostics and look for diagnostics whose ` +
-            `source is "Diff Review" — each one's code field looks like ` +
+            `source is "Crit" — each one's code field looks like ` +
             `"${threadLabel(threads[0])} ${code}", where the leading label names the comment and ` +
             `the rest routes it. ${followUp}`;
     }
@@ -58,7 +58,7 @@ export function buildNudgeMessage(
     return [
         `${subject} in this workspace.`,
         '',
-        'Read them with listDiffComments from the diff-review MCP server, using this code:',
+        'Read them with listDiffComments from the crit MCP server, using this code:',
         code,
         '',
         `The listing gives each comment its own code. ${followUp}`,
@@ -83,8 +83,8 @@ export async function buildPrompt(
     );
     if (includeDiagnosticCodes) {
         parts.push(
-            'Each comment is labelled with a short review id (R1, R2, …) and its Diff Review ' +
-            'diagnostic code. Pass the exact code — not the label — to Diff Review MCP tools; ' +
+            'Each comment is labelled with a short review id (R1, R2, …) and its Crit ' +
+            'diagnostic code. Pass the exact code — not the label — to Crit MCP tools; ' +
             'the label is only for referring to a comment in your own explanations.\n'
         );
     }
@@ -141,11 +141,11 @@ export async function buildPrompt(
     parts.push('Apply every change above. Keep all other code unchanged.');
     parts.push('');
     if (includeDiagnosticCodes) {
-        parts.push('After making the changes, respond via the `diff-review` MCP server:');
-        parts.push('- `mcp__diff-review__replyToDiffComment({ code, text })` — explain what you changed for each comment');
-        parts.push('- `mcp__diff-review__resolveDiffComment({ code })` — mark each comment as done');
+        parts.push('After making the changes, respond via the `crit` MCP server:');
+        parts.push('- `mcp__crit__replyToDiffComment({ code, text })` — explain what you changed for each comment');
+        parts.push('- `mcp__crit__resolveDiffComment({ code })` — mark each comment as done');
         parts.push('');
-        parts.push('Pass the exact **Diagnostic code** shown with each comment above as `code`. Do not pass the R-label — it is only a display name. If a tool reports a stale or unknown code, call `mcp__diff-review__listDiffComments({ code })` with any current code to re-read the live threads.');
+        parts.push('Pass the exact **Diagnostic code** shown with each comment above as `code`. Do not pass the R-label — it is only a display name. If a tool reports a stale or unknown code, call `mcp__crit__listDiffComments({ code })` with any current code to re-read the live threads.');
     } else {
         parts.push('After making the changes, use the review tools to respond:');
         parts.push('- Use #replyToDiffComment (with the comment id shown after R, and text) to explain what you changed for each comment');

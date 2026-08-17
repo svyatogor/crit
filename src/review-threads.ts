@@ -5,7 +5,7 @@ import {
     createProjectRef,
     createSessionRef,
     createThreadRef,
-    DIFF_REVIEW_DIAGNOSTIC_VERSION,
+    CRIT_DIAGNOSTIC_VERSION,
     encodeDiagnosticMetadata,
 } from './diagnostic-metadata';
 
@@ -114,7 +114,7 @@ export function trackThread(
     persistedThreadRef?: string,
 ): TrackedCommentThread {
     if (!thread.range) {
-        throw new Error('Diff Review threads must have a document range.');
+        throw new Error('Crit threads must have a document range.');
     }
     const trackedThread = thread as TrackedCommentThread;
     const tid = id ?? nextThreadId++;
@@ -139,7 +139,7 @@ export function isTrackedThread(thread: vscode.CommentThread): thread is Tracked
 
 export function requireTrackedThread(thread: vscode.CommentThread): TrackedCommentThread {
     if (!isTrackedThread(thread)) {
-        throw new Error('Diff Review thread is not tracked.');
+        throw new Error('Crit thread is not tracked.');
     }
     return thread;
 }
@@ -270,7 +270,7 @@ export function clearProjectRefCache(): void {
 
 export function diagnosticCode(thread: TrackedCommentThread): string {
     return encodeDiagnosticMetadata({
-        version: DIFF_REVIEW_DIAGNOSTIC_VERSION,
+        version: CRIT_DIAGNOSTIC_VERSION,
         sessionRef,
         projectRef: projectRefFor(thread.uri),
         threadRef: thread.threadRef,

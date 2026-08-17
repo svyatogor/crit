@@ -1,4 +1,4 @@
-# Diff Review with AI Agent
+# Crit
 
 **Inline code review comments for VS Code — review AI-generated changes, submit feedback in batch, and let agents respond.**
 
@@ -21,7 +21,7 @@ Click the **status bar** (`💬 2 open · 1 resolved`) to open the **comment pan
 - **Copy to Clipboard** — click 📋 to copy the structured prompt, then paste into Claude Code, Codex, or any AI chat
 - **MCP Server** — Claude Code connects directly via MCP for real-time comment interaction
 
-The default provider is **GitHub Copilot**. To use **Claude Code**, set **Diff Review: AI Provider** (`diffReview.aiProvider`) to `Claude Code` in VS Code settings. Send actions read this setting when invoked, so switching providers does not require a reload. Claude Code prompts include each comment's diagnostic code, preserving its VS Code window, project, and thread references for subsequent Diff Review MCP calls. Copilot prompts remain unchanged. If the selected provider cannot be opened, Diff Review copies the prompt to the clipboard instead.
+The default provider is **GitHub Copilot**. To use **Claude Code**, set **Crit: AI Provider** (`crit.aiProvider`) to `Claude Code` in VS Code settings. Send actions read this setting when invoked, so switching providers does not require a reload. Claude Code prompts include each comment's diagnostic code, preserving its VS Code window, project, and thread references for subsequent Crit MCP calls. Copilot prompts remain unchanged. If the selected provider cannot be opened, Crit copies the prompt to the clipboard instead.
 
 ---
 
@@ -74,7 +74,7 @@ Click the status bar to open an interactive panel with:
 - CRLF-aware — works correctly on Windows with `\r\n` line endings
 
 ### Review Comments as Diagnostics
-Every open review thread is also published as a VS Code **Information** diagnostic with the source `Diff Review`. This makes review feedback available to AI extensions that already read diagnostics from the current VS Code window and naturally keeps the feedback attached to the correct file and range.
+Every open review thread is also published as a VS Code **Information** diagnostic with the source `Crit`. This makes review feedback available to AI extensions that already read diagnostics from the current VS Code window and naturally keeps the feedback attached to the correct file and range.
 
 - Only open threads are published; resolving a thread removes its diagnostic and reopening restores it
 - Diagnostic messages contain the user-authored review requests, while agent replies remain in the full thread
@@ -84,7 +84,7 @@ Every open review thread is also published as a VS Code **Information** diagnost
 `Diagnostic.code` carries a short review label followed by the routing code, and is intentionally not added to the visible message:
 
 ```text
-R3 diff-review:v1;<session>;<project>;<thread>
+R3 crit:v1;<session>;<project>;<thread>
 ```
 
 The leading `R3` is a display label — the same id used in generated prompts and in `listDiffComments` output, so a comment can be referred to by name in conversation. It is **never an address**: all tools route on the thread ref inside the code, because review labels are per-branch sequence numbers and are reused across branches.
@@ -123,10 +123,10 @@ Agent: [calls #listDiffComments] → sees 3 open comments
 ### MCP Server (Claude Code, Cursor, Windsurf, etc.)
 The extension includes a standalone MCP server that any MCP-compatible AI client can connect to for real-time access to review comments. Available tools: `listDiffComments`, `replyToDiffComment`, `resolveDiffComment`, `deleteDiffComment`.
 
-Each MCP tool requires the full `code` from a Diff Review diagnostic. The code identifies the VS Code window, workspace project, and review thread:
+Each MCP tool requires the full `code` from a Crit diagnostic. The code identifies the VS Code window, workspace project, and review thread:
 
 ```text
-diff-review:v1;<session>;<project>;<thread>
+crit:v1;<session>;<project>;<thread>
 ```
 
 - `listDiffComments({ code })` routes to the encoded window and lists comments from the encoded project
@@ -139,10 +139,10 @@ Always pass a current diagnostic code unchanged. A code from a closed or reloade
 **Claude Code:**
 ```bash
 # Windows:
-claude mcp add -s user diff-review node "%USERPROFILE%\.vscode\extensions\jinqishen.diff-review-<version>\out\mcp-server.js"
+claude mcp add -s user crit node "%USERPROFILE%\.vscode\extensions\jinqishen.crit-<version>\out\mcp-server.js"
 
 # macOS/Linux:
-claude mcp add -s user diff-review node ~/.vscode/extensions/jinqishen.diff-review-<version>/out/mcp-server.js
+claude mcp add -s user crit node ~/.vscode/extensions/jinqishen.crit-<version>/out/mcp-server.js
 ```
 
 > Use `-s user` so the server is available in every directory. Without it, `claude mcp add` defaults to **local** scope and registers the server only for the directory you ran it in — it will appear to vanish when you start Claude Code anywhere else.
@@ -152,7 +152,7 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 ```json
 {
   "mcpServers": {
-    "diff-review": {
+    "crit": {
       "command": "node",
       "args": ["<extension-path>/out/mcp-server.js"]
     }
@@ -173,7 +173,7 @@ Run with: `node mcp-server.js` (stdio transport, no arguments needed).
 Every action that sends to AI also has a **Copy to Clipboard** variant — paste the structured prompt into Claude Code, Codex CLI, ChatGPT, or any AI:
 - **Per-thread**: 📋 button on the thread title bar
 - **Per-file**: Copy action in the comment panel
-- **Global**: "Diff Review: Copy All to Clipboard" in the command palette
+- **Global**: "Crit: Copy All to Clipboard" in the command palette
 
 ---
 
@@ -181,12 +181,12 @@ Every action that sends to AI also has a **Copy to Clipboard** variant — paste
 
 | Command | Description |
 |---|---|
-| `Diff Review: Show Comments Panel` | Open the interactive comment panel |
-| `Diff Review: Send All to AI` | Send all open comments to the configured AI provider |
-| `Diff Review: Copy All to Clipboard` | Copy all open comments as a structured prompt |
-| `Diff Review: Resolve All` | Resolve all open comments |
-| `Diff Review: Delete All Resolved` | Delete all resolved comments |
-| `Diff Review: Clear All Comments` | Delete all comments |
+| `Crit: Show Comments Panel` | Open the interactive comment panel |
+| `Crit: Send All to AI` | Send all open comments to the configured AI provider |
+| `Crit: Copy All to Clipboard` | Copy all open comments as a structured prompt |
+| `Crit: Resolve All` | Resolve all open comments |
+| `Crit: Delete All Resolved` | Delete all resolved comments |
+| `Crit: Clear All Comments` | Delete all comments |
 
 ---
 
@@ -199,9 +199,9 @@ src/
   mcp-server.ts          — Standalone MCP server for Claude Code (connects to IPC)
 ```
 
-**IPC Server**: Every VS Code window starts a local HTTP server on `127.0.0.1` using a random port. It atomically publishes `${TMPDIR}/diff-review/instances/<sessionRef>.json`. The MCP server parses the diagnostic code, reads the descriptor named by its `sessionRef`, scopes listing by `projectRef`, and addresses mutations by `threadRef`. Closing a window removes only its own descriptor. All comment reads/writes still go through the owning extension instance as the single source of truth.
+**IPC Server**: Every VS Code window starts a local HTTP server on `127.0.0.1` using a random port. It atomically publishes `${TMPDIR}/crit/instances/<sessionRef>.json`. The MCP server parses the diagnostic code, reads the descriptor named by its `sessionRef`, scopes listing by `projectRef`, and addresses mutations by `threadRef`. Closing a window removes only its own descriptor. All comment reads/writes still go through the owning extension instance as the single source of truth.
 
-**Branch Scoping**: Comments are stored under `diffReview.state.{repoName}.{branchName}` in VS Code's workspace state. Branch switches are detected via the git extension API.
+**Branch Scoping**: Comments are stored under `crit.state.{repoName}.{branchName}` in VS Code's workspace state. Branch switches are detected via the git extension API.
 
 ---
 
@@ -227,7 +227,7 @@ npm run build:mcp
 npx @vscode/vsce package --no-dependencies --allow-missing-repository
 
 # Deploy to installed extension (dev shortcut)
-Copy-Item "out\extension.js" "$HOME\.vscode\extensions\jinqishen.diff-review-0.1.0\out\extension.js" -Force
+Copy-Item "out\extension.js" "$HOME\.vscode\extensions\jinqishen.crit-0.1.0\out\extension.js" -Force
 ```
 
 ---

@@ -3,7 +3,7 @@ import * as path from 'path';
 import { sendMessageToSocket } from './claude-messaging';
 import { ClaudeSession, findSessionForWorkspace } from './claude-sessions';
 import { registerTools } from './copilot-tools';
-import { DIFF_REVIEW_DIAGNOSTIC_SOURCE } from './diagnostic-metadata';
+import { CRIT_DIAGNOSTIC_SOURCE } from './diagnostic-metadata';
 import { getGitApi } from './git';
 import { startIpcServer } from './ipc-server';
 import { buildNudgeMessage, buildPrompt } from './prompts';
@@ -67,7 +67,7 @@ function refreshDiagnostics() {
             diagnosticMessage(thread),
             vscode.DiagnosticSeverity.Information,
         );
-        diagnostic.source = DIFF_REVIEW_DIAGNOSTIC_SOURCE;
+        diagnostic.source = CRIT_DIAGNOSTIC_SOURCE;
         // Must stay a plain string. The object form (`{value, target}`) renders
         // more nicely in the Problems view, but agents that read diagnostics
         // stringify this field and receive "[object Object]", losing both the
@@ -139,7 +139,7 @@ type AiProvider = 'copilot' | 'claudeCode';
 
 function getAiProvider(): AiProvider {
     return vscode.workspace
-        .getConfiguration('diffReview')
+        .getConfiguration('crit')
         .get<AiProvider>('aiProvider', 'copilot');
 }
 
@@ -215,7 +215,7 @@ async function deliverToClaudeCode(
             // The session can exit between discovery and delivery; opening a
             // new conversation still gets the review in front of the user.
             outputLog.appendLine(
-                `[Diff Review] Cross-session delivery failed, opening a new conversation: ${error.message}`,
+                `[Crit] Cross-session delivery failed, opening a new conversation: ${error.message}`,
             );
         }
     }
@@ -275,7 +275,7 @@ function getBranchKey(): string {
 }
 
 function stateKey(branchKey?: string): string {
-    return `diffReview.state.${branchKey ?? currentBranchKey}`;
+    return `crit.state.${branchKey ?? currentBranchKey}`;
 }
 
 function saveState() {
@@ -291,7 +291,7 @@ function loadStateFromKey(controller: vscode.CommentController, key: string) {
 function switchToBranch(controller: vscode.CommentController, newKey: string) {
     if (newKey === currentBranchKey) return;
 
-    outputLog.appendLine(`[Diff Review] Branch switch: ${currentBranchKey} → ${newKey}`);
+    outputLog.appendLine(`[Crit] Branch switch: ${currentBranchKey} → ${newKey}`);
 
     // Persist any edit still inside the refresh debounce before the threads it
     // moved are cleared.
@@ -312,16 +312,16 @@ function switchToBranch(controller: vscode.CommentController, newKey: string) {
     if (newData && newData.threads && newData.threads.length > 0) {
         // New branch has its own saved comments — load them
         loadStateFromKey(controller, newKey);
-        outputLog.appendLine(`[Diff Review] Loaded ${threadMap.size} comments for branch ${newKey}`);
+        outputLog.appendLine(`[Crit] Loaded ${threadMap.size} comments for branch ${newKey}`);
     } else {
         // New branch has no saved comments — copy from the old branch (Option B)
         loadStateFromKey(controller, oldKey);
         if (threadMap.size > 0) {
             // Save the copied state under the new branch key
             saveState();
-            outputLog.appendLine(`[Diff Review] Inherited ${threadMap.size} comments from ${oldKey} to ${newKey}`);
+            outputLog.appendLine(`[Crit] Inherited ${threadMap.size} comments from ${oldKey} to ${newKey}`);
         } else {
-            outputLog.appendLine(`[Diff Review] No comments to inherit — clean slate for ${newKey}`);
+            outputLog.appendLine(`[Crit] No comments to inherit — clean slate for ${newKey}`);
         }
     }
 
@@ -332,7 +332,7 @@ function setupBranchWatcher(context: vscode.ExtensionContext, controller: vscode
     try {
         const git = getGitApi();
         if (!git) {
-            outputLog.appendLine('[Diff Review] Git API not available — branch scoping disabled');
+            outputLog.appendLine('[Crit] Git API not available — branch scoping disabled');
             return;
         }
         for (const repo of git.repositories) {
@@ -352,9 +352,9 @@ function setupBranchWatcher(context: vscode.ExtensionContext, controller: vscode
                 }
             });
         });
-        outputLog.appendLine(`[Diff Review] Branch watcher active, current: ${currentBranchKey}`);
+        outputLog.appendLine(`[Crit] Branch watcher active, current: ${currentBranchKey}`);
     } catch (e: any) {
-        outputLog.appendLine(`[Diff Review] Branch watcher setup failed: ${e.message}`);
+        outputLog.appendLine(`[Crit] Branch watcher setup failed: ${e.message}`);
     }
 }
 
@@ -414,15 +414,15 @@ function setupLineTracking(context: vscode.ExtensionContext) {
 
 export function activate(context: vscode.ExtensionContext) {
     extensionContext = context;
-    outputLog = vscode.window.createOutputChannel('Diff Review');
-    outputLog.appendLine('[Diff Review] Activating...');
+    outputLog = vscode.window.createOutputChannel('Crit');
+    outputLog.appendLine('[Crit] Activating...');
 
     setThreadsChangedHandler(() => {
         refresh();
         saveState();
     });
 
-    diagnosticCollection = vscode.languages.createDiagnosticCollection('diffReview');
+    diagnosticCollection = vscode.languages.createDiagnosticCollection('crit');
     context.subscriptions.push(diagnosticCollection);
 
     // A folder added or removed can change which project owns a thread's URI.
@@ -433,7 +433,7 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    const controller = vscode.comments.createCommentController('diffReview', 'Diff Review');
+    const controller = vscode.comments.createCommentController('crit', 'Crit');
     context.subscriptions.push(controller);
 
     controller.commentingRangeProvider = {
@@ -449,19 +449,19 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- Status bar (MUST be created before loadState/refresh) ---
     statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-    statusBar.command = 'diffReview.showPanel';
+    statusBar.command = 'crit.showPanel';
     statusBar.tooltip = 'Click to view review comments';
     context.subscriptions.push(statusBar);
 
     // --- Detect current branch and load state ---
     currentBranchKey = getBranchKey();
-    outputLog.appendLine(`[Diff Review] Current branch key: ${currentBranchKey}`);
+    outputLog.appendLine(`[Crit] Current branch key: ${currentBranchKey}`);
 
     try {
         loadStateFromKey(controller, currentBranchKey);
-        outputLog.appendLine(`[Diff Review] Loaded ${threadMap.size} persisted threads for ${currentBranchKey}`);
+        outputLog.appendLine(`[Crit] Loaded ${threadMap.size} persisted threads for ${currentBranchKey}`);
     } catch (e: any) {
-        outputLog.appendLine(`[Diff Review] Error loading state: ${e.message}`);
+        outputLog.appendLine(`[Crit] Error loading state: ${e.message}`);
     }
     refresh();
 
@@ -473,14 +473,14 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- IPC Server ---
     startIpcServer(context, outputLog).then(port => {
-        outputLog.appendLine(`[Diff Review] IPC server listening on 127.0.0.1:${port}`);
+        outputLog.appendLine(`[Crit] IPC server listening on 127.0.0.1:${port}`);
     }).catch(err => {
-        outputLog.appendLine(`[Diff Review] Failed to start IPC server: ${err}`);
+        outputLog.appendLine(`[Crit] Failed to start IPC server: ${err}`);
     });
 
     // --- Create comment (first comment in a new thread) ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.createNote', (reply: vscode.CommentReply) => {
+        vscode.commands.registerCommand('crit.createNote', (reply: vscode.CommentReply) => {
             const thread = reply.thread;
             thread.comments = [new ReviewComment(reply.text, 'user')];
             thread.canReply = true;
@@ -493,7 +493,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- Reply (additional comments in existing thread) ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.reply', (reply: vscode.CommentReply) => {
+        vscode.commands.registerCommand('crit.reply', (reply: vscode.CommentReply) => {
             const thread = reply.thread;
             const comment = new ReviewComment(reply.text, 'user');
             thread.comments = [...thread.comments, comment];
@@ -504,14 +504,14 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- Edit comment ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.editComment', (comment: ReviewComment) => {
+        vscode.commands.registerCommand('crit.editComment', (comment: ReviewComment) => {
             setCommentMode(comment.id, vscode.CommentMode.Editing);
         })
     );
 
     // --- Save edited comment ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.saveEdit', (comment: ReviewComment) => {
+        vscode.commands.registerCommand('crit.saveEdit', (comment: ReviewComment) => {
             if (!setCommentMode(comment.id, vscode.CommentMode.Preview)) return;
             refresh();
             saveState();
@@ -520,14 +520,14 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- Cancel edit ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.cancelEdit', (comment: ReviewComment) => {
+        vscode.commands.registerCommand('crit.cancelEdit', (comment: ReviewComment) => {
             setCommentMode(comment.id, vscode.CommentMode.Preview);
         })
     );
 
     // --- Delete individual comment ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.deleteNote', (comment: ReviewComment) => {
+        vscode.commands.registerCommand('crit.deleteNote', (comment: ReviewComment) => {
             const thread = findThreadForComment(comment.id);
             if (!thread) return;
             if (thread.comments.length <= 1) {
@@ -545,14 +545,14 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- Send single thread to configured AI provider ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.sendThread', async (thread: vscode.CommentThread) => {
+        vscode.commands.registerCommand('crit.sendThread', async (thread: vscode.CommentThread) => {
             await sendThreadsToAi([requireTrackedThread(thread)]);
         })
     );
 
     // --- Resolve thread ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.resolve', (thread: vscode.CommentThread) => {
+        vscode.commands.registerCommand('crit.resolve', (thread: vscode.CommentThread) => {
             resolveThread(thread);
             refresh();
             saveState();
@@ -561,7 +561,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- Unresolve thread ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.unresolve', (thread: vscode.CommentThread) => {
+        vscode.commands.registerCommand('crit.unresolve', (thread: vscode.CommentThread) => {
             unresolveThread(thread);
             refresh();
             saveState();
@@ -570,17 +570,17 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- Show comment panel ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.showPanel', () => showCommentPanel())
+        vscode.commands.registerCommand('crit.showPanel', () => showCommentPanel())
     );
 
     // --- Submit all open to configured AI provider ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.submitAll', () => submitAll())
+        vscode.commands.registerCommand('crit.submitAll', () => submitAll())
     );
 
     // --- Resolve all ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.resolveAll', () => {
+        vscode.commands.registerCommand('crit.resolveAll', () => {
             const open = openThreads();
             for (const thread of open) resolveThread(thread);
             refresh();
@@ -595,7 +595,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- Delete all resolved ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.deleteResolved', async () => {
+        vscode.commands.registerCommand('crit.deleteResolved', async () => {
             const resolved = [...threadMap.values()].filter(isResolved);
             if (resolved.length === 0) { vscode.window.showInformationMessage('No resolved comments to delete.'); return; }
             const answer = await vscode.window.showWarningMessage(
@@ -610,7 +610,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- Clear all ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.clearAll', async () => {
+        vscode.commands.registerCommand('crit.clearAll', async () => {
             if (threadMap.size === 0) return;
             const answer = await vscode.window.showWarningMessage(
                 `Delete all ${threadMap.size} review comment${threadMap.size !== 1 ? 's' : ''}?`, { modal: true }, 'Delete All'
@@ -624,7 +624,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- File-level batch: submit file ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.submitFile', async (fileKey: string) => {
+        vscode.commands.registerCommand('crit.submitFile', async (fileKey: string) => {
             const open = openThreadsInFile(fileKey);
             if (!open) return;
             if (open.length === 0) { vscode.window.showInformationMessage('No open comments in this file.'); return; }
@@ -634,7 +634,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- File-level batch: resolve file ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.resolveFile', (fileKey: string) => {
+        vscode.commands.registerCommand('crit.resolveFile', (fileKey: string) => {
             const open = openThreadsInFile(fileKey);
             if (!open) return;
             for (const thread of open) resolveThread(thread);
@@ -650,7 +650,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- File-level batch: delete resolved in file ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.deleteResolvedFile', async (fileKey: string) => {
+        vscode.commands.registerCommand('crit.deleteResolvedFile', async (fileKey: string) => {
             const entries = getThreadsByFile().get(fileKey);
             if (!entries) return;
             const resolved = entries.map(e => e.thread).filter(isResolved);
@@ -667,7 +667,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- Copy single thread to clipboard ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.copyThread', async (thread: vscode.CommentThread) => {
+        vscode.commands.registerCommand('crit.copyThread', async (thread: vscode.CommentThread) => {
             const prompt = await buildPrompt([requireTrackedThread(thread)]);
             await vscode.env.clipboard.writeText(prompt);
             vscode.window.showInformationMessage('Comment prompt copied to clipboard.');
@@ -676,7 +676,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- Copy all open to clipboard ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.copyAll', async () => {
+        vscode.commands.registerCommand('crit.copyAll', async () => {
             const open = openThreads();
             if (open.length === 0) { vscode.window.showInformationMessage('No open comments to copy.'); return; }
             const prompt = await buildPrompt(open);
@@ -687,7 +687,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- Copy file comments to clipboard ---
     context.subscriptions.push(
-        vscode.commands.registerCommand('diffReview.copyFile', async (fileKey: string) => {
+        vscode.commands.registerCommand('crit.copyFile', async (fileKey: string) => {
             const open = openThreadsInFile(fileKey);
             if (!open) return;
             if (open.length === 0) { vscode.window.showInformationMessage('No open comments in this file.'); return; }
@@ -812,31 +812,31 @@ async function showCommentPanel() {
 
         switch (pick.action) {
             case 'submitAll':
-                await vscode.commands.executeCommand('diffReview.submitAll');
+                await vscode.commands.executeCommand('crit.submitAll');
                 break;
             case 'copyAll':
-                await vscode.commands.executeCommand('diffReview.copyAll');
+                await vscode.commands.executeCommand('crit.copyAll');
                 break;
             case 'resolveAll':
-                await vscode.commands.executeCommand('diffReview.resolveAll');
+                await vscode.commands.executeCommand('crit.resolveAll');
                 break;
             case 'deleteResolved':
-                await vscode.commands.executeCommand('diffReview.deleteResolved');
+                await vscode.commands.executeCommand('crit.deleteResolved');
                 break;
             case 'clearAll':
-                await vscode.commands.executeCommand('diffReview.clearAll');
+                await vscode.commands.executeCommand('crit.clearAll');
                 break;
             case 'submitFile':
-                if (pick.fileKey) await vscode.commands.executeCommand('diffReview.submitFile', pick.fileKey);
+                if (pick.fileKey) await vscode.commands.executeCommand('crit.submitFile', pick.fileKey);
                 break;
             case 'copyFile':
-                if (pick.fileKey) await vscode.commands.executeCommand('diffReview.copyFile', pick.fileKey);
+                if (pick.fileKey) await vscode.commands.executeCommand('crit.copyFile', pick.fileKey);
                 break;
             case 'resolveFile':
-                if (pick.fileKey) await vscode.commands.executeCommand('diffReview.resolveFile', pick.fileKey);
+                if (pick.fileKey) await vscode.commands.executeCommand('crit.resolveFile', pick.fileKey);
                 break;
             case 'deleteResolvedFile':
-                if (pick.fileKey) await vscode.commands.executeCommand('diffReview.deleteResolvedFile', pick.fileKey);
+                if (pick.fileKey) await vscode.commands.executeCommand('crit.deleteResolvedFile', pick.fileKey);
                 break;
             case 'commentAction':
                 if (pick.threadId !== undefined) await showCommentActions(pick.threadId);
@@ -886,10 +886,10 @@ async function showCommentActions(threadId: number) {
             break;
         }
         case 'send':
-            await vscode.commands.executeCommand('diffReview.sendThread', thread);
+            await vscode.commands.executeCommand('crit.sendThread', thread);
             break;
         case 'copy':
-            await vscode.commands.executeCommand('diffReview.copyThread', thread);
+            await vscode.commands.executeCommand('crit.copyThread', thread);
             break;
         case 'resolve':
             resolveThread(thread);

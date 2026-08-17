@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { isProcessAlive } from './process-liveness';
 
 /**
- * On-disk registry of running Diff Review IPC servers.
+ * On-disk registry of running Crit IPC servers.
  *
  * Each VS Code window writes one descriptor naming the loopback port its IPC
  * server listens on; the MCP server reads the descriptor named by a diagnostic
@@ -53,7 +53,7 @@ const UNREADABLE_FILE_TTL_MS = 24 * 60 * 60 * 1000;
  * agree on without a handshake, and nothing here outlives the machine's uptime.
  */
 export function ipcRegistryDir(): string {
-    return path.join(os.tmpdir(), 'diff-review', 'instances');
+    return path.join(os.tmpdir(), 'crit', 'instances');
 }
 
 export function ipcDescriptorPath(sessionRef: string, registryDir = ipcRegistryDir()): string {
@@ -134,13 +134,13 @@ export function resolveLiveInstance(
 
     if ('missing' in parsed) {
         throw new Error(
-            `Missing or stale Diff Review instance descriptor for session ${sessionRef}. ` +
+            `Missing or stale Crit instance descriptor for session ${sessionRef}. ` +
             'Ensure that the matching VS Code window is running, then copy a current diagnostic code and try again.'
         );
     }
     if ('unreadable' in parsed) {
         throw new Error(
-            `Could not read Diff Review instance descriptor ${descriptorPath}: ${parsed.unreadable}`
+            `Could not read Crit instance descriptor ${descriptorPath}: ${parsed.unreadable}`
         );
     }
     if ('invalid' in parsed) {
@@ -156,7 +156,7 @@ export function resolveLiveInstance(
     // unrelated server, so the owning process must still be alive.
     if (!isProcessAlive(parsed.descriptor.pid)) {
         throw new Error(
-            `Stale Diff Review instance descriptor for session ${sessionRef}: ` +
+            `Stale Crit instance descriptor for session ${sessionRef}: ` +
             `the VS Code window that registered it (process ${parsed.descriptor.pid}) is no longer running. ` +
             'Copy a current diagnostic code from a running window and try again.'
         );
@@ -200,7 +200,7 @@ function parseDescriptorFile(descriptorPath: string): ParsedDescriptor {
 
 function malformedDescriptorError(descriptorPath: string, detail: string): Error {
     return new Error(
-        `Malformed Diff Review instance descriptor ${descriptorPath}: ${detail}. ` +
+        `Malformed Crit instance descriptor ${descriptorPath}: ${detail}. ` +
         'Reload the matching VS Code window to recreate it.'
     );
 }

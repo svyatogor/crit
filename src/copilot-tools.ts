@@ -23,10 +23,10 @@ export function registerTools(context: vscode.ExtensionContext) {
     if (!vscode.lm || !vscode.lm.registerTool) return;
 
     context.subscriptions.push(
-        vscode.lm.registerTool('diffReview_listComments', new ListCommentsTool()),
-        vscode.lm.registerTool('diffReview_replyToComment', new ReplyToCommentTool()),
-        vscode.lm.registerTool('diffReview_resolveComment', new ResolveCommentTool()),
-        vscode.lm.registerTool('diffReview_deleteComment', new DeleteCommentTool()),
+        vscode.lm.registerTool('crit_listComments', new ListCommentsTool()),
+        vscode.lm.registerTool('crit_replyToComment', new ReplyToCommentTool()),
+        vscode.lm.registerTool('crit_resolveComment', new ResolveCommentTool()),
+        vscode.lm.registerTool('crit_deleteComment', new DeleteCommentTool()),
     );
 }
 
