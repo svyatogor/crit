@@ -33,6 +33,25 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "Diff Review",
+      "properties": {
+        "diffReview.aiProvider": {
+          "type": "string",
+          "enum": [
+            "copilot",
+            "claudeCode"
+          ],
+          "enumItemLabels": [
+            "GitHub Copilot",
+            "Claude Code"
+          ],
+          "default": "copilot",
+          "scope": "window",
+          "description": "AI provider used by Diff Review's Send to AI actions."
+        }
+      }
+    },
     "commands": [
       {
         "command": "diffReview.createNote",
@@ -66,7 +85,7 @@
       },
       {
         "command": "diffReview.sendThread",
-        "title": "Send to Copilot",
+        "title": "Send to AI",
         "icon": "$(send)"
       },
       {
@@ -86,7 +105,7 @@
       },
       {
         "command": "diffReview.submitAll",
-        "title": "Diff Review: Submit All to Copilot",
+        "title": "Diff Review: Send All to AI",
         "icon": "$(send)"
       },
       {
@@ -256,6 +275,7 @@
     ]
   },
   "scripts": {
+    "test": "npm run compile && node --test tests/*.test.cjs",
     "compile": "tsc -p ./",
     "build": "npx esbuild src/extension.ts --bundle --outfile=out/extension.js --format=cjs --platform=node --external:vscode && npx esbuild src/mcp-server.ts --bundle --outfile=out/mcp-server.js --format=cjs --platform=node --target=node18",
     "build:ext": "npx esbuild src/extension.ts --bundle --outfile=out/extension.js --format=cjs --platform=node --external:vscode",
@@ -267,6 +287,7 @@
     "zod": "^3.24.4"
   },
   "devDependencies": {
+    "@types/node": "^26.2.0",
     "@types/vscode": "^1.93.0",
     "esbuild": "^0.20.0",
     "sharp": "^0.34.5",

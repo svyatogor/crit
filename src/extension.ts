@@ -1,95 +1,39 @@
 import * as vscode from 'vscode';
-import * as http from 'http';
-import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
-
-// --------------- Types ---------------
-
-type Role = 'user' | 'agent';
-
-interface SerializedComment {
-    id: number;
-    role: Role;
-    body: string;
-    timestamp: string;
-}
-
-interface SerializedThread {
-    id: number;
-    uri: string;
-    startLine: number;
-    endLine: number;
-    status: 'open' | 'resolved';
-    comments: SerializedComment[];
-}
-
-interface SerializedState {
-    version: 1;
-    nextThreadId: number;
-    nextCommentId: number;
-    threads: SerializedThread[];
-}
-
-// --------------- Comment Model ---------------
-
-let nextCommentId = 1;
-
-class ReviewComment implements vscode.Comment {
-    readonly id: number;
-    body: string | vscode.MarkdownString;
-    mode: vscode.CommentMode;
-    author: vscode.CommentAuthorInformation;
-    role: Role;
-    contextValue: string;
-    createdAt: string; // ISO string for serialization
-    timestamp: Date;   // vscode.Comment expects Date
-
-    constructor(body: string, role: Role, id?: number, createdAt?: string) {
-        this.id = id ?? nextCommentId++;
-        this.body = body;
-        this.role = role;
-        this.mode = vscode.CommentMode.Preview;
-        this.author = role === 'agent'
-            ? { name: '🤖 Agent' }
-            : { name: '👤 You' };
-        this.contextValue = role === 'agent' ? 'agentComment' : 'userComment';
-        this.createdAt = createdAt ?? new Date().toISOString();
-        this.timestamp = new Date(this.createdAt);
-    }
-}
-
-// --------------- Thread Tracking ---------------
-
-const threadMap = new Map<number, vscode.CommentThread>();
-const threadIds = new WeakMap<vscode.CommentThread, number>();
-let nextThreadId = 1;
-
-function trackThread(thread: vscode.CommentThread, id?: number): number {
-    const tid = id ?? nextThreadId++;
-    threadMap.set(tid, thread);
-    threadIds.set(thread, tid);
-    return tid;
-}
-
-function untrackThread(thread: vscode.CommentThread): void {
-    const id = threadIds.get(thread);
-    if (id !== undefined) threadMap.delete(id);
-}
-
-function findThreadForComment(commentId: number): vscode.CommentThread | undefined {
-    for (const thread of threadMap.values()) {
-        if (thread.comments.some(c => (c as ReviewComment).id === commentId)) {
-            return thread;
-        }
-    }
-    return undefined;
-}
+import { sendMessageToSocket } from './claude-messaging';
+import { ClaudeSession, findSessionForWorkspace } from './claude-sessions';
+import { registerTools } from './copilot-tools';
+import { DIFF_REVIEW_DIAGNOSTIC_SOURCE } from './diagnostic-metadata';
+import { getGitApi } from './git';
+import { startIpcServer } from './ipc-server';
+import { buildNudgeMessage, buildPrompt } from './prompts';
+import {
+    clearProjectRefCache,
+    clearThreads,
+    diagnosticCode,
+    diagnosticMessage,
+    findThreadForComment,
+    isResolved,
+    openThreads,
+    requireTrackedThread,
+    resolveThread,
+    restoreState,
+    ReviewComment,
+    SerializedState,
+    serializeState,
+    setThreadsChangedHandler,
+    threadLabel,
+    threadMap,
+    TrackedCommentThread,
+    trackThread,
+    unresolveThread,
+    untrackThread,
+} from './review-threads';
 
 // --------------- Helpers ---------------
 
-function getThreadsByFile(): Map<string, { id: number; thread: vscode.CommentThread }[]> {
-    const byFile = new Map<string, { id: number; thread: vscode.CommentThread }[]>();
+function getThreadsByFile(): Map<string, { id: number; thread: TrackedCommentThread }[]> {
+    const byFile = new Map<string, { id: number; thread: TrackedCommentThread }[]>();
     for (const [id, thread] of threadMap) {
         const rel = vscode.workspace.asRelativePath(thread.uri);
         if (!byFile.has(rel)) byFile.set(rel, []);
@@ -104,45 +48,215 @@ function threadPreview(thread: vscode.CommentThread): string {
     return text.length > 55 ? text.substring(0, 52) + '...' : text;
 }
 
-function resolveThread(thread: vscode.CommentThread) {
-    thread.label = '✅ Resolved';
-    thread.contextValue = 'resolved';
-    thread.collapsibleState = vscode.CommentThreadCollapsibleState.Collapsed;
-}
+function refreshDiagnostics() {
+    if (!diagnosticCollection) return;
 
-function unresolveThread(thread: vscode.CommentThread) {
-    thread.label = 'Open';
-    thread.contextValue = 'open';
-    thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+    const byUri = new Map<string, { uri: vscode.Uri; diagnostics: vscode.Diagnostic[] }>();
+    for (const thread of threadMap.values()) {
+        if (isResolved(thread)) continue;
+
+        const uriKey = thread.uri.toString();
+        let entry = byUri.get(uriKey);
+        if (!entry) {
+            entry = { uri: thread.uri, diagnostics: [] };
+            byUri.set(uriKey, entry);
+        }
+
+        const diagnostic = new vscode.Diagnostic(
+            thread.range,
+            diagnosticMessage(thread),
+            vscode.DiagnosticSeverity.Information,
+        );
+        diagnostic.source = DIFF_REVIEW_DIAGNOSTIC_SOURCE;
+        // Must stay a plain string. The object form (`{value, target}`) renders
+        // more nicely in the Problems view, but agents that read diagnostics
+        // stringify this field and receive "[object Object]", losing both the
+        // label and the routing code.
+        //
+        // The label leads so the Problems view is scannable ("R3 …"), and the
+        // routing code follows so an agent reading the diagnostic can still
+        // address the thread over MCP.
+        diagnostic.code = `${threadLabel(thread)} ${diagnosticCode(thread)}`;
+        entry.diagnostics.push(diagnostic);
+    }
+
+    diagnosticCollection.clear();
+    for (const { uri, diagnostics } of byUri.values()) {
+        diagnosticCollection.set(uri, diagnostics);
+    }
 }
 
 // --------------- Status Bar ---------------
 
 let statusBar: vscode.StatusBarItem;
+let diagnosticCollection: vscode.DiagnosticCollection | undefined;
 
 function refresh() {
     const n = threadMap.size;
-    const open = [...threadMap.values()].filter(t => t.contextValue !== 'resolved').length;
+    const open = openThreads().length;
     if (n > 0) {
         statusBar.text = `$(comment-discussion) ${open} open · ${n - open} resolved`;
         statusBar.show();
     } else {
         statusBar.hide();
     }
+    refreshDiagnostics();
+}
+
+const REFRESH_DEBOUNCE_MS = 250;
+let pendingRefresh: NodeJS.Timeout | undefined;
+
+/**
+ * Coalesce the re-render that follows a document edit.
+ *
+ * Shifting thread ranges must stay synchronous — it consumes the edit's
+ * `contentChanges` — but the status bar, the diagnostic rebuild, and the
+ * `workspaceState` write are pure functions of state that is already correct in
+ * memory. Running them per keystroke serialized every thread on the typing
+ * path. Discrete user actions (add, reply, resolve, delete) still refresh
+ * immediately; only typing is debounced.
+ */
+function scheduleRefresh() {
+    if (pendingRefresh) clearTimeout(pendingRefresh);
+    pendingRefresh = setTimeout(() => {
+        pendingRefresh = undefined;
+        refresh();
+        saveState();
+    }, REFRESH_DEBOUNCE_MS);
+}
+
+function flushPendingRefresh() {
+    if (!pendingRefresh) return;
+    clearTimeout(pendingRefresh);
+    pendingRefresh = undefined;
+    refresh();
+    saveState();
+}
+
+// --------------- AI Provider ---------------
+
+type AiProvider = 'copilot' | 'claudeCode';
+
+function getAiProvider(): AiProvider {
+    return vscode.workspace
+        .getConfiguration('diffReview')
+        .get<AiProvider>('aiProvider', 'copilot');
+}
+
+/**
+ * The terminal Claude Code runs in, if it is running there.
+ *
+ * Claude Code creates its terminal as `Claude Code` (overridable via
+ * CLAUDE_CODE_TERMINAL_TITLE), so match on that rather than grabbing whichever
+ * terminal happens to be active — sending a review prompt into an unrelated
+ * shell would execute it.
+ */
+function findClaudeCodeTerminal(): vscode.Terminal | undefined {
+    const expected = process.env.CLAUDE_CODE_TERMINAL_TITLE || 'Claude Code';
+    const matches = vscode.window.terminals.filter(t => t.name.includes(expected));
+    if (matches.length === 0) return undefined;
+
+    // Prefer the focused one when several are open.
+    const active = vscode.window.activeTerminal;
+    if (active && matches.includes(active)) return active;
+    return matches[matches.length - 1];
+}
+
+/** The Claude Code session running in this workspace, if there is one. */
+function findWorkspaceClaudeSession(): ClaudeSession | undefined {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder || folder.uri.scheme !== 'file') return undefined;
+
+    try {
+        return findSessionForWorkspace(folder.uri.fsPath, {
+            // Guards the case where VS Code itself was launched from a Claude
+            // session: that session must not review its own comments.
+            excludeSessionId: process.env.CLAUDE_CODE_SESSION_ID,
+        });
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Deliver a prompt to Claude Code, preferring paths that keep the user in the
+ * conversation they are already having.
+ *
+ *  1. Terminal — appends to the running CLI session.
+ *  2. Live session — cross-session message into the running conversation.
+ *  3. New conversation — last resort; the webview cannot be handed a prompt for
+ *     a session it already hosts ("Your prompt was not applied").
+ */
+async function deliverToClaudeCode(
+    threads: TrackedCommentThread[],
+    prompt: string,
+): Promise<void> {
+    const terminal = findClaudeCodeTerminal();
+    if (terminal) {
+        terminal.show();
+        terminal.sendText(buildNudgeMessage(threads, 'diagnostics'), true);
+        return;
+    }
+
+    const session = findWorkspaceClaudeSession();
+    if (session) {
+        try {
+            await sendMessageToSocket(
+                session.messagingSocketPath,
+                buildNudgeMessage(threads, 'mcp'),
+            );
+            // The inbox never acks, and the session may be off-screen, so say
+            // where the comments went rather than leaving the send invisible.
+            vscode.window.showInformationMessage(
+                `Sent review comments to Claude Code session ${sessionLabel(session)}.`,
+            );
+            return;
+        } catch (error: any) {
+            // The session can exit between discovery and delivery; opening a
+            // new conversation still gets the review in front of the user.
+            outputLog.appendLine(
+                `[Diff Review] Cross-session delivery failed, opening a new conversation: ${error.message}`,
+            );
+        }
+    }
+
+    await vscode.commands.executeCommand(
+        'claude-vscode.primaryEditor.open',
+        undefined,
+        prompt,
+    );
+}
+
+function sessionLabel(session: ClaudeSession): string {
+    return session.name ?? session.sessionId.slice(0, 8);
+}
+
+async function sendThreadsToAi(threads: TrackedCommentThread[]): Promise<void> {
+    if (threads.length === 0) return;
+
+    const provider = getAiProvider();
+    const prompt = await buildPrompt(threads, provider === 'claudeCode');
+
+    try {
+        if (provider === 'claudeCode') {
+            await deliverToClaudeCode(threads, prompt);
+        } else {
+            await vscode.commands.executeCommand('workbench.action.chat.open', { query: prompt });
+        }
+    } catch {
+        await vscode.env.clipboard.writeText(prompt);
+        const providerName = provider === 'claudeCode' ? 'Claude Code' : 'GitHub Copilot';
+        vscode.window.showWarningMessage(
+            `Could not open ${providerName}. The prompt was copied to the clipboard.`,
+        );
+    }
 }
 
 // --------------- Persistence (branch-scoped) ---------------
 
 let extensionContext: vscode.ExtensionContext;
-let activeController: vscode.CommentController | undefined;
 let currentBranchKey: string = '_default';
 let outputLog: vscode.OutputChannel;
-
-function getGitApi(): any | undefined {
-    const gitExtension = vscode.extensions.getExtension('vscode.git');
-    if (!gitExtension?.isActive) return undefined;
-    return gitExtension.exports.getAPI(1);
-}
 
 function getBranchKey(): string {
     try {
@@ -164,73 +278,24 @@ function stateKey(branchKey?: string): string {
     return `diffReview.state.${branchKey ?? currentBranchKey}`;
 }
 
-function serializeState(): SerializedState {
-    const threads: SerializedThread[] = [];
-    for (const [id, thread] of threadMap) {
-        threads.push({
-            id,
-            uri: thread.uri.toString(),
-            startLine: thread.range.start.line,
-            endLine: thread.range.end.line,
-            status: thread.contextValue === 'resolved' ? 'resolved' : 'open',
-            comments: thread.comments.map(c => {
-                const rc = c as ReviewComment;
-                return {
-                    id: rc.id,
-                    role: rc.role,
-                    body: typeof rc.body === 'string' ? rc.body : rc.body.value,
-                    timestamp: rc.createdAt,
-                };
-            }),
-        });
-    }
-    return { version: 1, nextThreadId, nextCommentId, threads };
-}
-
 function saveState() {
     extensionContext.workspaceState.update(stateKey(), serializeState());
-}
-
-function clearThreads() {
-    for (const thread of threadMap.values()) thread.dispose();
-    threadMap.clear();
-    nextThreadId = 1;
-    nextCommentId = 1;
 }
 
 function loadStateFromKey(controller: vscode.CommentController, key: string) {
     const data = extensionContext.workspaceState.get<SerializedState>(stateKey(key));
     if (!data || !data.threads) return;
-
-    nextThreadId = data.nextThreadId || 1;
-    nextCommentId = data.nextCommentId || 1;
-
-    for (const st of data.threads) {
-        const uri = vscode.Uri.parse(st.uri);
-        const range = new vscode.Range(st.startLine, 0, st.endLine, 0);
-        const thread = controller.createCommentThread(uri, range, []);
-        const comments = st.comments.map(
-            sc => new ReviewComment(sc.body, sc.role, sc.id, sc.timestamp || new Date().toISOString())
-        );
-        thread.comments = comments;
-        thread.canReply = true;
-        if (st.status === 'resolved') {
-            thread.label = '✅ Resolved';
-            thread.contextValue = 'resolved';
-            thread.collapsibleState = vscode.CommentThreadCollapsibleState.Collapsed;
-        } else {
-            thread.label = 'Open';
-            thread.contextValue = 'open';
-            thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
-        }
-        trackThread(thread, st.id);
-    }
+    restoreState(controller, data);
 }
 
 function switchToBranch(controller: vscode.CommentController, newKey: string) {
     if (newKey === currentBranchKey) return;
 
     outputLog.appendLine(`[Diff Review] Branch switch: ${currentBranchKey} → ${newKey}`);
+
+    // Persist any edit still inside the refresh debounce before the threads it
+    // moved are cleared.
+    flushPendingRefresh();
 
     // Save current branch's comments
     saveState();
@@ -302,7 +367,7 @@ function setupLineTracking(context: vscode.ExtensionContext) {
 
             // Only track changes for documents that have comment threads
             const docUri = e.document.uri.toString();
-            const affected: vscode.CommentThread[] = [];
+            const affected: TrackedCommentThread[] = [];
             for (const thread of threadMap.values()) {
                 if (thread.uri.toString() === docUri) affected.push(thread);
             }
@@ -336,130 +401,13 @@ function setupLineTracking(context: vscode.ExtensionContext) {
                 }
             }
 
-            saveState();
+            scheduleRefresh();
         })
     );
-}
 
-// --------------- IPC HTTP Server ---------------
-
-let ipcServer: http.Server | undefined;
-let ipcPort: number = 0;
-
-function startIpcServer(context: vscode.ExtensionContext): Promise<number> {
-    return new Promise((resolve, reject) => {
-        const server = http.createServer(async (req, res) => {
-            // CORS headers for local use
-            res.setHeader('Content-Type', 'application/json');
-            res.setHeader('Access-Control-Allow-Origin', 'localhost');
-
-            const url = new URL(req.url || '/', `http://localhost`);
-            const method = req.method || 'GET';
-
-            try {
-                if (method === 'GET' && url.pathname === '/comments') {
-                    // List all comments
-                    const result = serializeState();
-                    res.writeHead(200);
-                    res.end(JSON.stringify(result));
-                } else if (method === 'POST' && url.pathname === '/reply') {
-                    const body = await readBody(req);
-                    const { threadId, text } = JSON.parse(body);
-                    const thread = threadMap.get(threadId);
-                    if (!thread) {
-                        res.writeHead(404);
-                        res.end(JSON.stringify({ error: `Thread #${threadId} not found` }));
-                        return;
-                    }
-                    const reply = new ReviewComment(text, 'agent');
-                    thread.comments = [...thread.comments, reply];
-                    thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
-                    saveState();
-                    res.writeHead(200);
-                    res.end(JSON.stringify({ ok: true, commentId: reply.id }));
-                } else if (method === 'POST' && url.pathname === '/resolve') {
-                    const body = await readBody(req);
-                    const { threadId } = JSON.parse(body);
-                    const thread = threadMap.get(threadId);
-                    if (!thread) {
-                        res.writeHead(404);
-                        res.end(JSON.stringify({ error: `Thread #${threadId} not found` }));
-                        return;
-                    }
-                    resolveThread(thread);
-                    refresh();
-                    saveState();
-                    res.writeHead(200);
-                    res.end(JSON.stringify({ ok: true }));
-                } else if (method === 'POST' && url.pathname === '/unresolve') {
-                    const body = await readBody(req);
-                    const { threadId } = JSON.parse(body);
-                    const thread = threadMap.get(threadId);
-                    if (!thread) {
-                        res.writeHead(404);
-                        res.end(JSON.stringify({ error: `Thread #${threadId} not found` }));
-                        return;
-                    }
-                    unresolveThread(thread);
-                    refresh();
-                    saveState();
-                    res.writeHead(200);
-                    res.end(JSON.stringify({ ok: true }));
-                } else if (method === 'POST' && url.pathname === '/delete') {
-                    const body = await readBody(req);
-                    const { threadId } = JSON.parse(body);
-                    const thread = threadMap.get(threadId);
-                    if (!thread) {
-                        res.writeHead(404);
-                        res.end(JSON.stringify({ error: `Thread #${threadId} not found` }));
-                        return;
-                    }
-                    threadMap.delete(threadId);
-                    thread.dispose();
-                    refresh();
-                    saveState();
-                    res.writeHead(200);
-                    res.end(JSON.stringify({ ok: true }));
-                } else if (method === 'GET' && url.pathname === '/health') {
-                    res.writeHead(200);
-                    res.end(JSON.stringify({ ok: true, comments: threadMap.size }));
-                } else {
-                    res.writeHead(404);
-                    res.end(JSON.stringify({ error: 'Not found' }));
-                }
-            } catch (err: any) {
-                res.writeHead(400);
-                res.end(JSON.stringify({ error: err.message }));
-            }
-        });
-
-        // Listen on random available port
-        server.listen(0, '127.0.0.1', () => {
-            const addr = server.address();
-            if (addr && typeof addr !== 'string') {
-                ipcPort = addr.port;
-                ipcServer = server;
-                // Write port file so MCP server can find us
-                const portFile = path.join(os.tmpdir(), 'diff-review-port');
-                fs.writeFileSync(portFile, String(ipcPort), 'utf-8');
-                resolve(ipcPort);
-            } else {
-                reject(new Error('Failed to get server address'));
-            }
-        });
-
-        server.on('error', reject);
-        context.subscriptions.push({ dispose: () => { server.close(); try { fs.unlinkSync(path.join(os.tmpdir(), 'diff-review-port')); } catch {} } });
-    });
-}
-
-function readBody(req: http.IncomingMessage): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const chunks: Buffer[] = [];
-        req.on('data', (chunk: Buffer) => chunks.push(chunk));
-        req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-        req.on('error', reject);
-    });
+    // Deactivation must not drop an edit that is still inside the debounce
+    // window.
+    context.subscriptions.push({ dispose: flushPendingRefresh });
 }
 
 // --------------- Activation ---------------
@@ -469,8 +417,23 @@ export function activate(context: vscode.ExtensionContext) {
     outputLog = vscode.window.createOutputChannel('Diff Review');
     outputLog.appendLine('[Diff Review] Activating...');
 
+    setThreadsChangedHandler(() => {
+        refresh();
+        saveState();
+    });
+
+    diagnosticCollection = vscode.languages.createDiagnosticCollection('diffReview');
+    context.subscriptions.push(diagnosticCollection);
+
+    // A folder added or removed can change which project owns a thread's URI.
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeWorkspaceFolders(() => {
+            clearProjectRefCache();
+            refresh();
+        })
+    );
+
     const controller = vscode.comments.createCommentController('diffReview', 'Diff Review');
-    activeController = controller;
     context.subscriptions.push(controller);
 
     controller.commentingRangeProvider = {
@@ -494,17 +457,6 @@ export function activate(context: vscode.ExtensionContext) {
     currentBranchKey = getBranchKey();
     outputLog.appendLine(`[Diff Review] Current branch key: ${currentBranchKey}`);
 
-    // Migrate old unscoped state if it exists
-    const oldData = extensionContext.workspaceState.get<SerializedState>('diffReview.state');
-    if (oldData && oldData.threads && oldData.threads.length > 0) {
-        const scopedData = extensionContext.workspaceState.get<SerializedState>(stateKey());
-        if (!scopedData || !scopedData.threads || scopedData.threads.length === 0) {
-            extensionContext.workspaceState.update(stateKey(), oldData);
-            outputLog.appendLine(`[Diff Review] Migrated ${oldData.threads.length} threads from unscoped to ${currentBranchKey}`);
-        }
-        extensionContext.workspaceState.update('diffReview.state', undefined);
-    }
-
     try {
         loadStateFromKey(controller, currentBranchKey);
         outputLog.appendLine(`[Diff Review] Loaded ${threadMap.size} persisted threads for ${currentBranchKey}`);
@@ -520,7 +472,7 @@ export function activate(context: vscode.ExtensionContext) {
     setupBranchWatcher(context, controller);
 
     // --- IPC Server ---
-    startIpcServer(context).then(port => {
+    startIpcServer(context, outputLog).then(port => {
         outputLog.appendLine(`[Diff Review] IPC server listening on 127.0.0.1:${port}`);
     }).catch(err => {
         outputLog.appendLine(`[Diff Review] Failed to start IPC server: ${err}`);
@@ -530,12 +482,9 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('diffReview.createNote', (reply: vscode.CommentReply) => {
             const thread = reply.thread;
-            const comment = new ReviewComment(reply.text, 'user');
-            thread.comments = [comment];
-            thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+            thread.comments = [new ReviewComment(reply.text, 'user')];
             thread.canReply = true;
-            thread.label = 'Open';
-            thread.contextValue = 'open';
+            unresolveThread(thread);
             trackThread(thread);
             refresh();
             saveState();
@@ -548,6 +497,7 @@ export function activate(context: vscode.ExtensionContext) {
             const thread = reply.thread;
             const comment = new ReviewComment(reply.text, 'user');
             thread.comments = [...thread.comments, comment];
+            refresh();
             saveState();
         })
     );
@@ -555,32 +505,15 @@ export function activate(context: vscode.ExtensionContext) {
     // --- Edit comment ---
     context.subscriptions.push(
         vscode.commands.registerCommand('diffReview.editComment', (comment: ReviewComment) => {
-            const thread = findThreadForComment(comment.id);
-            if (!thread) return;
-            thread.comments = thread.comments.map(c => {
-                if ((c as ReviewComment).id === comment.id) {
-                    const edited = c as ReviewComment;
-                    edited.mode = vscode.CommentMode.Editing;
-                    return edited;
-                }
-                return c;
-            });
+            setCommentMode(comment.id, vscode.CommentMode.Editing);
         })
     );
 
     // --- Save edited comment ---
     context.subscriptions.push(
         vscode.commands.registerCommand('diffReview.saveEdit', (comment: ReviewComment) => {
-            const thread = findThreadForComment(comment.id);
-            if (!thread) return;
-            thread.comments = thread.comments.map(c => {
-                if ((c as ReviewComment).id === comment.id) {
-                    const saved = c as ReviewComment;
-                    saved.mode = vscode.CommentMode.Preview;
-                    return saved;
-                }
-                return c;
-            });
+            if (!setCommentMode(comment.id, vscode.CommentMode.Preview)) return;
+            refresh();
             saveState();
         })
     );
@@ -588,16 +521,7 @@ export function activate(context: vscode.ExtensionContext) {
     // --- Cancel edit ---
     context.subscriptions.push(
         vscode.commands.registerCommand('diffReview.cancelEdit', (comment: ReviewComment) => {
-            const thread = findThreadForComment(comment.id);
-            if (!thread) return;
-            thread.comments = thread.comments.map(c => {
-                if ((c as ReviewComment).id === comment.id) {
-                    const cancelled = c as ReviewComment;
-                    cancelled.mode = vscode.CommentMode.Preview;
-                    return cancelled;
-                }
-                return c;
-            });
+            setCommentMode(comment.id, vscode.CommentMode.Preview);
         })
     );
 
@@ -619,16 +543,10 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // --- Send single thread to Copilot ---
+    // --- Send single thread to configured AI provider ---
     context.subscriptions.push(
         vscode.commands.registerCommand('diffReview.sendThread', async (thread: vscode.CommentThread) => {
-            const prompt = await buildPrompt([thread]);
-            try {
-                await vscode.commands.executeCommand('workbench.action.chat.open', { query: prompt });
-            } catch {
-                await vscode.env.clipboard.writeText(prompt);
-                vscode.window.showInformationMessage('Prompt copied to clipboard.');
-            }
+            await sendThreadsToAi([requireTrackedThread(thread)]);
         })
     );
 
@@ -655,7 +573,7 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('diffReview.showPanel', () => showCommentPanel())
     );
 
-    // --- Submit all open to Copilot ---
+    // --- Submit all open to configured AI provider ---
     context.subscriptions.push(
         vscode.commands.registerCommand('diffReview.submitAll', () => submitAll())
     );
@@ -663,26 +581,28 @@ export function activate(context: vscode.ExtensionContext) {
     // --- Resolve all ---
     context.subscriptions.push(
         vscode.commands.registerCommand('diffReview.resolveAll', () => {
-            let count = 0;
-            for (const thread of threadMap.values()) {
-                if (thread.contextValue !== 'resolved') { resolveThread(thread); count++; }
-            }
+            const open = openThreads();
+            for (const thread of open) resolveThread(thread);
             refresh();
             saveState();
-            if (count > 0) vscode.window.showInformationMessage(`Resolved ${count} comment${count !== 1 ? 's' : ''}.`);
+            if (open.length > 0) {
+                vscode.window.showInformationMessage(
+                    `Resolved ${open.length} comment${open.length !== 1 ? 's' : ''}.`
+                );
+            }
         })
     );
 
     // --- Delete all resolved ---
     context.subscriptions.push(
         vscode.commands.registerCommand('diffReview.deleteResolved', async () => {
-            const resolved = [...threadMap.entries()].filter(([, t]) => t.contextValue === 'resolved');
+            const resolved = [...threadMap.values()].filter(isResolved);
             if (resolved.length === 0) { vscode.window.showInformationMessage('No resolved comments to delete.'); return; }
             const answer = await vscode.window.showWarningMessage(
                 `Delete ${resolved.length} resolved comment${resolved.length !== 1 ? 's' : ''}?`, { modal: true }, 'Delete'
             );
             if (answer !== 'Delete') return;
-            for (const [id, thread] of resolved) { threadMap.delete(id); thread.dispose(); }
+            for (const thread of resolved) { untrackThread(thread); thread.dispose(); }
             refresh();
             saveState();
         })
@@ -696,8 +616,7 @@ export function activate(context: vscode.ExtensionContext) {
                 `Delete all ${threadMap.size} review comment${threadMap.size !== 1 ? 's' : ''}?`, { modal: true }, 'Delete All'
             );
             if (answer !== 'Delete All') return;
-            for (const thread of threadMap.values()) thread.dispose();
-            threadMap.clear();
+            clearThreads();
             refresh();
             saveState();
         })
@@ -706,50 +625,41 @@ export function activate(context: vscode.ExtensionContext) {
     // --- File-level batch: submit file ---
     context.subscriptions.push(
         vscode.commands.registerCommand('diffReview.submitFile', async (fileKey: string) => {
-            const byFile = getThreadsByFile();
-            const entries = byFile.get(fileKey);
-            if (!entries) return;
-            const openThreads = entries.filter(e => e.thread.contextValue !== 'resolved').map(e => e.thread);
-            if (openThreads.length === 0) { vscode.window.showInformationMessage('No open comments in this file.'); return; }
-            const prompt = await buildPrompt(openThreads);
-            try {
-                await vscode.commands.executeCommand('workbench.action.chat.open', { query: prompt });
-            } catch {
-                await vscode.env.clipboard.writeText(prompt);
-                vscode.window.showInformationMessage('Prompt copied to clipboard.');
-            }
+            const open = openThreadsInFile(fileKey);
+            if (!open) return;
+            if (open.length === 0) { vscode.window.showInformationMessage('No open comments in this file.'); return; }
+            await sendThreadsToAi(open);
         })
     );
 
     // --- File-level batch: resolve file ---
     context.subscriptions.push(
         vscode.commands.registerCommand('diffReview.resolveFile', (fileKey: string) => {
-            const byFile = getThreadsByFile();
-            const entries = byFile.get(fileKey);
-            if (!entries) return;
-            let count = 0;
-            for (const { thread } of entries) {
-                if (thread.contextValue !== 'resolved') { resolveThread(thread); count++; }
-            }
+            const open = openThreadsInFile(fileKey);
+            if (!open) return;
+            for (const thread of open) resolveThread(thread);
             refresh();
             saveState();
-            if (count > 0) vscode.window.showInformationMessage(`Resolved ${count} comment${count !== 1 ? 's' : ''} in ${fileKey}.`);
+            if (open.length > 0) {
+                vscode.window.showInformationMessage(
+                    `Resolved ${open.length} comment${open.length !== 1 ? 's' : ''} in ${fileKey}.`
+                );
+            }
         })
     );
 
     // --- File-level batch: delete resolved in file ---
     context.subscriptions.push(
         vscode.commands.registerCommand('diffReview.deleteResolvedFile', async (fileKey: string) => {
-            const byFile = getThreadsByFile();
-            const entries = byFile.get(fileKey);
+            const entries = getThreadsByFile().get(fileKey);
             if (!entries) return;
-            const resolved = entries.filter(e => e.thread.contextValue === 'resolved');
+            const resolved = entries.map(e => e.thread).filter(isResolved);
             if (resolved.length === 0) { vscode.window.showInformationMessage('No resolved comments in this file.'); return; }
             const answer = await vscode.window.showWarningMessage(
                 `Delete ${resolved.length} resolved comment${resolved.length !== 1 ? 's' : ''} in ${fileKey}?`, { modal: true }, 'Delete'
             );
             if (answer !== 'Delete') return;
-            for (const { id, thread } of resolved) { threadMap.delete(id); thread.dispose(); }
+            for (const thread of resolved) { untrackThread(thread); thread.dispose(); }
             refresh();
             saveState();
         })
@@ -758,7 +668,7 @@ export function activate(context: vscode.ExtensionContext) {
     // --- Copy single thread to clipboard ---
     context.subscriptions.push(
         vscode.commands.registerCommand('diffReview.copyThread', async (thread: vscode.CommentThread) => {
-            const prompt = await buildPrompt([thread]);
+            const prompt = await buildPrompt([requireTrackedThread(thread)]);
             await vscode.env.clipboard.writeText(prompt);
             vscode.window.showInformationMessage('Comment prompt copied to clipboard.');
         })
@@ -767,30 +677,45 @@ export function activate(context: vscode.ExtensionContext) {
     // --- Copy all open to clipboard ---
     context.subscriptions.push(
         vscode.commands.registerCommand('diffReview.copyAll', async () => {
-            const openThreads = [...threadMap.values()].filter(t => t.contextValue !== 'resolved');
-            if (openThreads.length === 0) { vscode.window.showInformationMessage('No open comments to copy.'); return; }
-            const prompt = await buildPrompt(openThreads);
+            const open = openThreads();
+            if (open.length === 0) { vscode.window.showInformationMessage('No open comments to copy.'); return; }
+            const prompt = await buildPrompt(open);
             await vscode.env.clipboard.writeText(prompt);
-            vscode.window.showInformationMessage(`${openThreads.length} comment(s) copied to clipboard.`);
+            vscode.window.showInformationMessage(`${open.length} comment(s) copied to clipboard.`);
         })
     );
 
     // --- Copy file comments to clipboard ---
     context.subscriptions.push(
         vscode.commands.registerCommand('diffReview.copyFile', async (fileKey: string) => {
-            const byFile = getThreadsByFile();
-            const entries = byFile.get(fileKey);
-            if (!entries) return;
-            const openThreads = entries.filter(e => e.thread.contextValue !== 'resolved').map(e => e.thread);
-            if (openThreads.length === 0) { vscode.window.showInformationMessage('No open comments in this file.'); return; }
-            const prompt = await buildPrompt(openThreads);
+            const open = openThreadsInFile(fileKey);
+            if (!open) return;
+            if (open.length === 0) { vscode.window.showInformationMessage('No open comments in this file.'); return; }
+            const prompt = await buildPrompt(open);
             await vscode.env.clipboard.writeText(prompt);
-            vscode.window.showInformationMessage(`${openThreads.length} comment(s) from ${fileKey} copied to clipboard.`);
+            vscode.window.showInformationMessage(`${open.length} comment(s) from ${fileKey} copied to clipboard.`);
         })
     );
 
     // --- Register Copilot tools ---
     registerTools(context);
+}
+
+/** Open threads in `fileKey`, or undefined when the file has no threads. */
+function openThreadsInFile(fileKey: string): TrackedCommentThread[] | undefined {
+    const entries = getThreadsByFile().get(fileKey);
+    if (!entries) return undefined;
+    return entries.map(e => e.thread).filter(thread => !isResolved(thread));
+}
+
+function setCommentMode(commentId: number, mode: vscode.CommentMode): boolean {
+    const thread = findThreadForComment(commentId);
+    if (!thread) return false;
+    thread.comments = thread.comments.map(c => {
+        if ((c as ReviewComment).id === commentId) (c as ReviewComment).mode = mode;
+        return c;
+    });
+    return true;
 }
 
 // --------------- Interactive QuickPick Panel ---------------
@@ -808,7 +733,7 @@ async function showCommentPanel() {
     }
 
     const qp = vscode.window.createQuickPick<ActionItem>();
-    const openCount = [...threadMap.values()].filter(t => t.contextValue !== 'resolved').length;
+    const openCount = openThreads().length;
     const resolvedCount = threadMap.size - openCount;
     qp.title = `Review Comments (${openCount} open, ${resolvedCount} resolved)`;
     qp.placeholder = 'Type to search comments… Select an action or comment.';
@@ -820,7 +745,7 @@ async function showCommentPanel() {
 
         // Global actions (always shown)
         items.push(
-            { label: '$(send) Submit All Open to Copilot', description: `${openCount} open`, action: 'submitAll' },
+            { label: '$(send) Send All Open to AI', description: `${openCount} open`, action: 'submitAll' },
             { label: '$(clippy) Copy All Open to Clipboard', description: `${openCount} open`, action: 'copyAll' },
             { label: '$(check-all) Resolve All', description: `${openCount} open`, action: 'resolveAll' },
             { label: '$(trash) Delete All Resolved', description: `${resolvedCount} resolved`, action: 'deleteResolved' },
@@ -845,13 +770,13 @@ async function showCommentPanel() {
 
             if (matchingEntries.length === 0) continue;
 
-            const fileOpen = matchingEntries.filter(e => e.thread.contextValue !== 'resolved').length;
+            const fileOpen = matchingEntries.filter(e => !isResolved(e.thread)).length;
             const fileResolved = matchingEntries.length - fileOpen;
 
             // File header with batch actions
             items.push({ label: `📁 ${file}  (${fileOpen} open, ${fileResolved} resolved)`, kind: vscode.QuickPickItemKind.Separator });
             items.push(
-                { label: `  $(send) Submit ${file}`, description: `${fileOpen} open`, action: 'submitFile', fileKey: file },
+                { label: `  $(send) Send ${file} to AI`, description: `${fileOpen} open`, action: 'submitFile', fileKey: file },
                 { label: `  $(clippy) Copy ${file}`, description: `${fileOpen} open`, action: 'copyFile', fileKey: file },
                 { label: `  $(check-all) Resolve ${file}`, description: `${fileOpen} open`, action: 'resolveFile', fileKey: file },
                 { label: `  $(trash) Delete Resolved in ${file}`, description: `${fileResolved} resolved`, action: 'deleteResolvedFile', fileKey: file },
@@ -861,8 +786,7 @@ async function showCommentPanel() {
             for (const { id, thread } of matchingEntries) {
                 const line = thread.range.start.line + 1;
                 const preview = threadPreview(thread);
-                const resolved = thread.contextValue === 'resolved';
-                const status = resolved ? '✅' : '💬';
+                const status = isResolved(thread) ? '✅' : '💬';
                 const replyCount = thread.comments.length - 1;
                 const replyInfo = replyCount > 0 ? `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}` : '';
                 const roles = thread.comments.map(c => (c as ReviewComment).role === 'agent' ? '🤖' : '👤').join('');
@@ -932,13 +856,13 @@ async function showCommentActions(threadId: number) {
     const rel = vscode.workspace.asRelativePath(thread.uri);
     const line = thread.range.start.line + 1;
     const preview = threadPreview(thread);
-    const resolved = thread.contextValue === 'resolved';
+    const resolved = isResolved(thread);
 
     interface ActionItem extends vscode.QuickPickItem { action: string; }
 
     const items: ActionItem[] = [
         { label: '$(eye) Go to Comment', description: `${rel}:${line}`, action: 'goto' },
-        { label: '$(send) Send to Copilot', description: 'Submit this comment as a prompt', action: 'send' },
+        { label: '$(send) Send to AI', description: 'Send this comment to the configured AI provider', action: 'send' },
         { label: '$(clippy) Copy to Clipboard', description: 'Copy this comment as a prompt', action: 'copy' },
         { label: resolved ? '$(debug-restart) Reopen' : '$(check) Resolve', action: resolved ? 'unresolve' : 'resolve' },
         { label: '$(trash) Delete', action: 'delete' },
@@ -970,19 +894,22 @@ async function showCommentActions(threadId: number) {
         case 'resolve':
             resolveThread(thread);
             refresh();
+            saveState();
             break;
         case 'unresolve':
             unresolveThread(thread);
             refresh();
+            saveState();
             break;
         case 'delete': {
             const answer = await vscode.window.showWarningMessage(
                 'Delete this comment thread?', { modal: true }, 'Delete'
             );
             if (answer !== 'Delete') break;
-            threadMap.delete(threadId);
+            untrackThread(thread);
             thread.dispose();
             refresh();
+            saveState();
             break;
         }
     }
@@ -991,317 +918,12 @@ async function showCommentActions(threadId: number) {
 // --------------- Submit All ---------------
 
 async function submitAll() {
-    const openThreads = [...threadMap.values()].filter(t => t.contextValue !== 'resolved');
-    if (openThreads.length === 0) {
+    const open = openThreads();
+    if (open.length === 0) {
         vscode.window.showInformationMessage('No open review comments to submit.');
         return;
     }
-    const prompt = await buildPrompt(openThreads);
-    try {
-        await vscode.commands.executeCommand('workbench.action.chat.open', { query: prompt });
-    } catch {
-        await vscode.env.clipboard.writeText(prompt);
-        vscode.window.showInformationMessage(
-            `Prompt with ${openThreads.length} comment(s) copied to clipboard.`
-        );
-    }
-}
-
-// --------------- Git Diff Context ---------------
-
-interface DiffHunk {
-    header: string;
-    lines: string[];
-}
-
-async function getFileDiffHunks(uri: vscode.Uri): Promise<DiffHunk[]> {
-    try {
-        const git = getGitApi();
-        if (!git) return [];
-        const repo = git.repositories.find((r: any) =>
-            uri.fsPath.startsWith(r.rootUri.fsPath)
-        );
-        if (!repo) return [];
-
-        // Get unstaged diff (working tree vs index)
-        const unstaged = await repo.diff(false) || '';
-        // Get staged diff (index vs HEAD)
-        const staged = await repo.diff(true) || '';
-        // Combine — unstaged first since it reflects current file state
-        const fullDiff = unstaged + '\n' + staged;
-
-        if (!fullDiff.trim()) return [];
-
-        const rel = path.relative(repo.rootUri.fsPath, uri.fsPath).replace(/\\/g, '/');
-
-        // Split diff into per-file sections
-        const fileSections = fullDiff.split(/^(?=diff --git )/m);
-        const targetPrefix = `diff --git a/${rel} b/${rel}`;
-        const fileSection = fileSections.find(s => s.startsWith(targetPrefix));
-        if (!fileSection) return [];
-
-        // Split into hunks by @@ markers
-        const hunkParts = fileSection.split(/^(?=@@)/m);
-        const hunks: DiffHunk[] = [];
-
-        for (const part of hunkParts) {
-            if (!part.startsWith('@@')) continue;
-            const lines = part.split('\n');
-            const header = lines[0];
-            const body = lines.slice(1).filter(l => l !== '' || lines.indexOf(l) < lines.length - 1);
-            hunks.push({ header, lines: body });
-        }
-
-        return hunks;
-    } catch {
-        return [];
-    }
-}
-
-function escapeRegex(s: string): string {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function findRelevantHunk(hunks: DiffHunk[], targetLine: number): string | undefined {
-    for (const hunk of hunks) {
-        // Parse @@ -oldStart,oldCount +newStart,newCount @@
-        const m = hunk.header.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
-        if (!m) continue;
-
-        const newStart = parseInt(m[3], 10);
-        const newCount = parseInt(m[4] ?? '1', 10);
-        const newEnd = newStart + newCount - 1;
-
-        // Target line is 1-based
-        if (targetLine >= newStart && targetLine <= newEnd) {
-            // Return the hunk with limited context (max 15 lines around comment)
-            const allLines = [hunk.header, ...hunk.lines];
-            if (allLines.length <= 20) return allLines.join('\n');
-            // Find the approximate position in the hunk
-            let newLineCounter = newStart;
-            let bestIndex = 1; // skip header
-            for (let i = 1; i < allLines.length; i++) {
-                const line = allLines[i];
-                if (!line.startsWith('-')) {
-                    if (newLineCounter === targetLine) {
-                        bestIndex = i;
-                        break;
-                    }
-                    newLineCounter++;
-                }
-            }
-            const start = Math.max(1, bestIndex - 7);
-            const end = Math.min(allLines.length, bestIndex + 7);
-            return [hunk.header, ...allLines.slice(start, end)].join('\n');
-        }
-    }
-    return undefined;
-}
-
-// --------------- Prompt Builder ---------------
-
-async function buildPrompt(targetThreads: vscode.CommentThread[]): Promise<string> {
-    const byFile = new Map<string, vscode.CommentThread[]>();
-    for (const thread of targetThreads) {
-        const key = thread.uri.toString();
-        if (!byFile.has(key)) byFile.set(key, []);
-        byFile.get(key)!.push(thread);
-    }
-
-    const parts: string[] = [];
-    parts.push(
-        'Apply the following review comments to the code. Each comment includes ' +
-        'the file, line number, surrounding code context, the git diff (if available), and the requested change.\n'
-    );
-
-    for (const [uriStr, fileThreads] of byFile) {
-        const uri = vscode.Uri.parse(uriStr);
-        const rel = vscode.workspace.asRelativePath(uri);
-        parts.push(`## ${rel}\n`);
-
-        // Get diff hunks for this file (once per file)
-        const hunks = await getFileDiffHunks(uri);
-
-        const sorted = [...fileThreads].sort(
-            (a, b) => a.range.start.line - b.range.start.line
-        );
-
-        for (const thread of sorted) {
-            const line = thread.range.start.line + 1;
-
-            // Format comment thread with roles
-            const body = thread.comments
-                .map(c => {
-                    const role = (c as ReviewComment).role || 'user';
-                    const text = typeof c.body === 'string' ? c.body : c.body.value;
-                    return thread.comments.length > 1 ? `[${role}]: ${text}` : text;
-                })
-                .join('\n');
-
-            // Grab ~5 lines of surrounding code for context
-            let codeContext = '';
-            try {
-                let doc = vscode.workspace.textDocuments.find(
-                    d => d.uri.toString() === uriStr
-                );
-                if (!doc) {
-                    doc = vscode.workspace.textDocuments.find(
-                        d => d.uri.fsPath === uri.fsPath
-                    );
-                }
-                if (!doc) {
-                    doc = await vscode.workspace.openTextDocument(uri);
-                }
-                const s = Math.max(0, thread.range.start.line - 2);
-                const e = Math.min(doc.lineCount - 1, thread.range.end.line + 2);
-                const lines: string[] = [];
-                for (let i = s; i <= e; i++) {
-                    const marker = i === thread.range.start.line ? '→' : ' ';
-                    lines.push(`${marker} ${i + 1} | ${doc.lineAt(i).text}`);
-                }
-                codeContext = lines.join('\n');
-            } catch {
-                // Proceed without context
-            }
-
-            // Find relevant diff hunk for this line
-            const diffHunk = findRelevantHunk(hunks, line);
-
-            parts.push(`### Line ${line}`);
-            if (codeContext) {
-                parts.push('```');
-                parts.push(codeContext);
-                parts.push('```');
-            }
-            if (diffHunk) {
-                parts.push('**Git diff:**');
-                parts.push('```diff');
-                parts.push(diffHunk);
-                parts.push('```');
-            }
-            parts.push(`**Comment:** ${body}\n`);
-        }
-    }
-
-    parts.push('---');
-    parts.push('Apply every change above. Keep all other code unchanged.');
-    parts.push('');
-    parts.push('After making the changes, use the review tools to respond:');
-    parts.push('- Use replyToDiffComment (with commentId and text) to explain what you changed for each comment');
-    parts.push('- Use resolveDiffComment (with commentId) to mark each comment as done');
-    return parts.join('\n');
-}
-
-// --------------- Copilot Tools ---------------
-
-function registerTools(context: vscode.ExtensionContext) {
-    if (!vscode.lm || !vscode.lm.registerTool) return;
-
-    context.subscriptions.push(
-        vscode.lm.registerTool('diffReview_listComments', new ListCommentsTool()),
-        vscode.lm.registerTool('diffReview_replyToComment', new ReplyToCommentTool()),
-        vscode.lm.registerTool('diffReview_resolveComment', new ResolveCommentTool()),
-        vscode.lm.registerTool('diffReview_deleteComment', new DeleteCommentTool()),
-    );
-}
-
-class ListCommentsTool implements vscode.LanguageModelTool<{}> {
-    async invoke(
-        _options: vscode.LanguageModelToolInvocationOptions<{}>,
-        _token: vscode.CancellationToken
-    ): Promise<vscode.LanguageModelToolResult> {
-        if (threadMap.size === 0) {
-            return new vscode.LanguageModelToolResult([
-                new vscode.LanguageModelTextPart('No review comments.')
-            ]);
-        }
-        const lines: string[] = [];
-        for (const [id, thread] of threadMap) {
-            const rel = vscode.workspace.asRelativePath(thread.uri);
-            const line = thread.range.start.line + 1;
-            const status = thread.contextValue === 'resolved' ? 'RESOLVED' : 'OPEN';
-            const comments = thread.comments.map(c => {
-                const role = (c as ReviewComment).role || 'user';
-                const text = typeof c.body === 'string' ? c.body : c.body.value;
-                return `  [${role}] ${text}`;
-            }).join('\n');
-            lines.push(`#${id} | ${rel}:${line} | ${status}\n${comments}`);
-        }
-        return new vscode.LanguageModelToolResult([
-            new vscode.LanguageModelTextPart(lines.join('\n\n'))
-        ]);
-    }
-}
-
-interface ReplyParams { commentId: number; text: string; }
-
-class ReplyToCommentTool implements vscode.LanguageModelTool<ReplyParams> {
-    async invoke(
-        options: vscode.LanguageModelToolInvocationOptions<ReplyParams>,
-        _token: vscode.CancellationToken
-    ): Promise<vscode.LanguageModelToolResult> {
-        const { commentId, text } = options.input;
-        const thread = threadMap.get(commentId);
-        if (!thread) {
-            return new vscode.LanguageModelToolResult([
-                new vscode.LanguageModelTextPart(`Comment #${commentId} not found.`)
-            ]);
-        }
-        const reply = new ReviewComment(text, 'agent');
-        thread.comments = [...thread.comments, reply];
-        thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
-        saveState();
-        return new vscode.LanguageModelToolResult([
-            new vscode.LanguageModelTextPart(`Replied to comment #${commentId} as agent.`)
-        ]);
-    }
-}
-
-interface CommentIdParam { commentId: number; }
-
-class ResolveCommentTool implements vscode.LanguageModelTool<CommentIdParam> {
-    async invoke(
-        options: vscode.LanguageModelToolInvocationOptions<CommentIdParam>,
-        _token: vscode.CancellationToken
-    ): Promise<vscode.LanguageModelToolResult> {
-        const { commentId } = options.input;
-        const thread = threadMap.get(commentId);
-        if (!thread) {
-            return new vscode.LanguageModelToolResult([
-                new vscode.LanguageModelTextPart(`Comment #${commentId} not found.`)
-            ]);
-        }
-        thread.label = '✅ Resolved';
-        thread.contextValue = 'resolved';
-        thread.collapsibleState = vscode.CommentThreadCollapsibleState.Collapsed;
-        refresh();
-        saveState();
-        return new vscode.LanguageModelToolResult([
-            new vscode.LanguageModelTextPart(`Comment #${commentId} resolved.`)
-        ]);
-    }
-}
-
-class DeleteCommentTool implements vscode.LanguageModelTool<CommentIdParam> {
-    async invoke(
-        options: vscode.LanguageModelToolInvocationOptions<CommentIdParam>,
-        _token: vscode.CancellationToken
-    ): Promise<vscode.LanguageModelToolResult> {
-        const { commentId } = options.input;
-        const thread = threadMap.get(commentId);
-        if (!thread) {
-            return new vscode.LanguageModelToolResult([
-                new vscode.LanguageModelTextPart(`Comment #${commentId} not found.`)
-            ]);
-        }
-        threadMap.delete(commentId);
-        thread.dispose();
-        refresh();
-        saveState();
-        return new vscode.LanguageModelToolResult([
-            new vscode.LanguageModelTextPart(`Comment #${commentId} deleted.`)
-        ]);
-    }
+    await sendThreadsToAi(open);
 }
 
 export function deactivate() {}
