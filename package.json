@@ -1,9 +1,9 @@
 {
   "name": "crit",
   "displayName": "Crit",
-  "description": "Crit \u2014 pair review with your AI. Inline code review comments \u2014 review AI-generated changes, submit feedback in batch to Copilot, Claude Code, or any AI agent, with git diff context",
+  "description": "Crit — pair review with your AI. Inline code review comments — review AI-generated changes, submit feedback in batch to Copilot, Claude Code, or any AI agent, with git diff context",
   "version": "0.4.0",
-  "publisher": "Sergey Kuleshov",
+  "publisher": "svyatogor",
   "icon": "icon.png",
   "repository": {
     "type": "git",
@@ -55,7 +55,7 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "markdownDescription": "Absolute path to the `claude` CLI. Leave empty to find it on PATH \u2014 only needed when Crit cannot locate it, e.g. when VS Code failed to resolve your shell environment."
+          "markdownDescription": "Absolute path to the `claude` CLI. Leave empty to find it on PATH — only needed when Crit cannot locate it, e.g. when VS Code failed to resolve your shell environment."
         }
       }
     },
@@ -259,7 +259,7 @@
         "displayName": "Resolve Crit Comment",
         "toolReferenceName": "resolveDiffComment",
         "icon": "$(check)",
-        "modelDescription": "Mark an inline review comment as resolved/done. Use this after you have addressed the feedback in the comment \u2014 e.g., after making the requested code change.",
+        "modelDescription": "Mark an inline review comment as resolved/done. Use this after you have addressed the feedback in the comment — e.g., after making the requested code change.",
         "canBeReferencedInPrompt": true,
         "inputSchema": {
           "type": "object",
@@ -306,6 +306,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
+    "@vscode/vsce": "^3.9.2",
     "which": "^7.0.0",
     "zod": "^3.24.4"
   },
