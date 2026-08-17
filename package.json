@@ -7,7 +7,7 @@
   "icon": "icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jinqishen0725/diff-review"
+    "url": "https://github.com/svyatogor/crit"
   },
   "engines": {
     "vscode": "^1.93.0"
@@ -49,6 +49,12 @@
           "default": "copilot",
           "scope": "window",
           "description": "AI provider used by Crit's Send to AI actions."
+        },
+        "crit.claudePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Absolute path to the `claude` CLI. Leave empty to find it on PATH — only needed when Crit cannot locate it, e.g. when VS Code failed to resolve your shell environment."
         }
       }
     },
@@ -132,6 +138,11 @@
         "command": "crit.copyAll",
         "title": "Crit: Copy All to Clipboard",
         "icon": "$(clippy)"
+      },
+      {
+        "command": "crit.installMcpServer",
+        "title": "Crit: Install MCP Server for Claude Code",
+        "icon": "$(plug)"
       }
     ],
     "menus": {
@@ -284,11 +295,13 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
+    "which": "^7.0.0",
     "zod": "^3.24.4"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
     "@types/vscode": "^1.93.0",
+    "@types/which": "^3.0.4",
     "esbuild": "^0.20.0",
     "sharp": "^0.34.5",
     "typescript": "^5.0.0"

@@ -6,6 +6,7 @@ import { registerTools } from './copilot-tools';
 import { CRIT_DIAGNOSTIC_SOURCE } from './diagnostic-metadata';
 import { getGitApi } from './git';
 import { startIpcServer } from './ipc-server';
+import { installMcpServer, promptIfMcpMissing, stageServer } from './mcp-install';
 import { buildNudgeMessage, buildPrompt } from './prompts';
 import {
     clearProjectRefCache,
@@ -241,6 +242,9 @@ async function sendThreadsToAi(threads: TrackedCommentThread[]): Promise<void> {
     try {
         if (provider === 'claudeCode') {
             await deliverToClaudeCode(threads, prompt);
+            // Not awaited: the prompt is already delivered, and whether the MCP
+            // tools are wired up must not hold up the send.
+            void promptIfMcpMissing(extensionContext, outputLog);
         } else {
             await vscode.commands.executeCommand('workbench.action.chat.open', { query: prompt });
         }
@@ -472,6 +476,13 @@ export function activate(context: vscode.ExtensionContext) {
     // --- Branch watcher ---
     setupBranchWatcher(context, controller);
 
+    try {
+        const staged = stageServer(context);
+        if (staged.updated) outputLog.appendLine(`[Crit] Staged MCP server at ${staged.serverPath}`);
+    } catch (e: any) {
+        outputLog.appendLine(`[Crit] Could not stage MCP server: ${e.message}`);
+    }
+
     // --- IPC Server ---
     startIpcServer(context, outputLog).then(port => {
         outputLog.appendLine(`[Crit] IPC server listening on 127.0.0.1:${port}`);
@@ -696,6 +707,11 @@ export function activate(context: vscode.ExtensionContext) {
             await vscode.env.clipboard.writeText(prompt);
             vscode.window.showInformationMessage(`${open.length} comment(s) from ${fileKey} copied to clipboard.`);
         })
+    );
+
+    // --- Install the MCP server into Claude Code's user config ---
+    context.subscriptions.push(
+        vscode.commands.registerCommand('crit.installMcpServer', () => installMcpServer(context, outputLog))
     );
 
     // --- Register Copilot tools ---

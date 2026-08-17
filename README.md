@@ -137,15 +137,28 @@ crit:v1;<session>;<project>;<thread>
 Always pass a current diagnostic code unchanged. A code from a closed or reloaded window is intentionally rejected as stale.
 
 **Claude Code:**
-```bash
-# Windows:
-claude mcp add -s user crit node "%USERPROFILE%\.vscode\extensions\jinqishen.crit-<version>\out\mcp-server.js"
+Run **Crit: Install MCP Server for Claude Code** from the Command Palette. It registers the server as `crit` at **user** scope, so it is available in every directory, and re-running it repairs a stale entry.
 
-# macOS/Linux:
-claude mcp add -s user crit node ~/.vscode/extensions/jinqishen.crit-<version>/out/mcp-server.js
+The path it registers is *not* inside the extension directory — that directory carries the version (`svyatogor.crit-<version>`) and would move on every update. The extension instead stages the bundle to a fixed path on activation and registers that:
+
+```text
+~/.crit/mcp/mcp-server.js
 ```
 
-> Use `-s user` so the server is available in every directory. Without it, `claude mcp add` defaults to **local** scope and registers the server only for the directory you ran it in — it will appear to vanish when you start Claude Code anywhere else.
+An extension update replaces the staged copy in place, so **updating Crit never requires re-installing the MCP server**.
+
+To register it by hand instead:
+```bash
+claude mcp add -s user crit -- node ~/.crit/mcp/mcp-server.js
+```
+
+> Use `-s user`. Without it, `claude mcp add` defaults to **local** scope and registers the server only for the directory you ran it in — it will appear to vanish when you start Claude Code anywhere else.
+
+If the provider is **Claude Code** and no `crit` server is registered, the first send in a window offers to install it — with **Don't Show Again** if you would rather wire it up yourself. The check is `claude mcp get crit`, run once per window in the workspace folder, so the CLI decides what counts as registered: config location, scopes, and directory all follow its own rules. Matching is by name, so repointing the `crit` entry at a different build is a supported thing to do — Crit sees it as installed and leaves it alone.
+
+`claude` is looked up on the extension host's `PATH`. VS Code has already resolved that PATH by running your login *and* interactive shell, so **mise**, **asdf**, **nix**, and **volta** setups are picked up, including rc-file activation like `mise activate zsh`. If yours is somewhere that lookup can't reach, set `crit.claudePath`.
+
+The registered interpreter is the bare word `node`, resolved by whatever environment Claude Code itself runs in; no absolute toolchain path is recorded, so the server is never pinned to a runtime version that a later `mise prune` or nix GC can delete.
 
 **Cursor:**
 Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
@@ -154,16 +167,16 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
   "mcpServers": {
     "crit": {
       "command": "node",
-      "args": ["<extension-path>/out/mcp-server.js"]
+      "args": ["<home>/.crit/mcp/mcp-server.js"]
     }
   }
 }
 ```
 
 **Other MCP clients:**
-Any client that supports the stdio transport can connect. The server binary is at:
+Any client that supports the stdio transport can connect. Point it at the staged copy, which keeps its path across extension updates:
 ```
-<extension-install-path>/out/mcp-server.js
+<home>/.crit/mcp/mcp-server.js
 ```
 Run with: `node mcp-server.js` (stdio transport, no arguments needed).
 
@@ -197,6 +210,7 @@ src/
   diagnostic-metadata.ts — Diagnostic identity and metadata codec
   extension.ts           — Comment controller, diagnostics, persistence, IPC server, Copilot tools
   mcp-server.ts          — Standalone MCP server for Claude Code (connects to IPC)
+  mcp-install.ts         — Stages the MCP bundle at a version-stable path, registers it with Claude Code
 ```
 
 **IPC Server**: Every VS Code window starts a local HTTP server on `127.0.0.1` using a random port. It atomically publishes `${TMPDIR}/crit/instances/<sessionRef>.json`. The MCP server parses the diagnostic code, reads the descriptor named by its `sessionRef`, scopes listing by `projectRef`, and addresses mutations by `threadRef`. Closing a window removes only its own descriptor. All comment reads/writes still go through the owning extension instance as the single source of truth.
@@ -227,7 +241,7 @@ npm run build:mcp
 npx @vscode/vsce package --no-dependencies --allow-missing-repository
 
 # Deploy to installed extension (dev shortcut)
-Copy-Item "out\extension.js" "$HOME\.vscode\extensions\jinqishen.crit-0.1.0\out\extension.js" -Force
+Copy-Item "out\extension.js" "$HOME\.vscode\extensions\svyatogor.crit-0.1.0\out\extension.js" -Force
 ```
 
 ---
