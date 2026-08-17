@@ -78,8 +78,10 @@ export function stageServer(context: vscode.ExtensionContext, dir = stagingDir()
         return { serverPath: target, updated: false };
     }
 
+    const bundle = fs.readFileSync(source);
+
     fs.mkdirSync(dir, { recursive: true });
-    writeAtomic(target, fs.readFileSync(source));
+    writeAtomic(target, bundle);
     writeAtomic(stampPath(dir), Buffer.from(JSON.stringify(current, null, 2)));
     return { serverPath: target, updated: true };
 }
