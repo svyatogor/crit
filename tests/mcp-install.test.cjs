@@ -3,31 +3,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const Module = require('node:module');
 
 // The module under test imports `vscode`, which only exists inside the
-// extension host. Stub it before requiring; `settings` is what the stubbed
-// `getConfiguration` reads, so a test can set `crit.claudePath`.
-const settings = new Map();
-const originalResolve = Module._resolveFilename;
-Module._resolveFilename = function (request, ...rest) {
-    if (request === 'vscode') return 'vscode';
-    return originalResolve.call(this, request, ...rest);
-};
-require.cache['vscode'] = {
-    id: 'vscode',
-    filename: 'vscode',
-    loaded: true,
-    exports: {
-        Uri: { joinPath: (base, ...parts) => ({ fsPath: path.join(base.fsPath, ...parts) }) },
-        window: {},
-        env: {},
-        workspace: {
-            workspaceFolders: [],
-            getConfiguration: () => ({ get: (key) => settings.get(key) }),
-        },
-    },
-};
+// extension host; the harness redirects it to a stub. `settings` backs the
+// stub's `getConfiguration`, so a test can set `crit.claudePath`.
+const { vscodeStub } = require('./harness.cjs');
+const settings = vscodeStub.settings;
 
 const {
     MCP_SERVER_NAME,
@@ -36,7 +17,7 @@ const {
     shellQuote,
     stageServer,
     stagedServerPath,
-} = require('../out/mcp-install.js');
+} = require('../src/mcp-install.ts');
 
 function tempDir(t, prefix) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));

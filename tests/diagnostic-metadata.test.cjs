@@ -1,13 +1,16 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
+// Lets `src` be required as TypeScript, and stubs `vscode`.
+require('./harness.cjs');
+
 const {
     createProjectRef,
     createSessionRef,
     createThreadRef,
     encodeDiagnosticMetadata,
     parseDiagnosticMetadata,
-} = require('../out/diagnostic-metadata.js');
+} = require('../src/diagnostic-metadata.ts');
 
 test('diagnostic metadata round trips through the versioned code', () => {
     const metadata = {
@@ -19,23 +22,23 @@ test('diagnostic metadata round trips through the versioned code', () => {
 
     const code = encodeDiagnosticMetadata(metadata);
 
-    assert.match(code, /^diff-review:v1;[0-9a-f]{8};[0-9a-f]{8};[0-9a-f]{8}$/);
+    assert.match(code, /^crit:v1;[0-9a-f]{8};[0-9a-f]{8};[0-9a-f]{8}$/);
     // The code is rendered verbatim in the Problems view, so keep it short.
     assert.ok(code.length <= 45, `code too long for the Problems view: ${code.length}`);
     assert.deepEqual(parseDiagnosticMetadata(code), metadata);
 });
 
 test('parser rejects malformed and unsupported diagnostic codes', () => {
-    assert.equal(parseDiagnosticMetadata('not-diff-review'), undefined);
+    assert.equal(parseDiagnosticMetadata('not-crit'), undefined);
     assert.equal(
         parseDiagnosticMetadata(
-            `diff-review:v2;${createSessionRef()};${createProjectRef('project')};${createThreadRef()}`,
+            `crit:v2;${createSessionRef()};${createProjectRef('project')};${createThreadRef()}`,
         ),
         undefined,
     );
     assert.equal(
         parseDiagnosticMetadata(
-            `diff-review:v1;bad;${createProjectRef('project')};${createThreadRef()}`,
+            `crit:v1;bad;${createProjectRef('project')};${createThreadRef()}`,
         ),
         undefined,
     );
@@ -89,7 +92,7 @@ test('a diagnostic code copied with its R-label still resolves', () => {
     };
     const code = encodeDiagnosticMetadata(metadata);
 
-    // Diagnostic.code is published as `R3 diff-review:v1;…`; an agent that
+    // Diagnostic.code is published as `R3 crit:v1;…`; an agent that
     // copies the whole field must still route correctly.
     assert.deepEqual(parseDiagnosticMetadata(`R3 ${code}`), metadata);
     assert.deepEqual(parseDiagnosticMetadata(`R42  ${code}`), metadata);

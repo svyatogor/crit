@@ -4,10 +4,13 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+// Lets `src` be required as TypeScript, and stubs `vscode`.
+require('./harness.cjs');
+
 const {
     findSessionForWorkspace,
     listClaudeSessions,
-} = require('../out/claude-sessions.js');
+} = require('../src/claude-sessions.ts');
 
 /**
  * Build an isolated registry: descriptor files, real workspace directories (so
@@ -15,7 +18,7 @@ const {
  * placeholder socket files, since discovery only checks that the socket exists.
  */
 function createFixture() {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'diff-review-sessions-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'crit-sessions-'));
     const registryDir = path.join(root, 'sessions');
     const socketDir = path.join(root, 'socks');
     fs.mkdirSync(registryDir, { recursive: true });
@@ -160,7 +163,7 @@ test('filters by entrypoint and excludes a named session', t => {
 });
 
 test('a missing registry directory yields no sessions instead of throwing', () => {
-    const missing = path.join(os.tmpdir(), 'diff-review-no-such-registry-dir');
+    const missing = path.join(os.tmpdir(), 'crit-no-such-registry-dir');
     assert.deepEqual(listClaudeSessions({ registryDir: missing }), []);
     assert.equal(findSessionForWorkspace(os.tmpdir(), { registryDir: missing }), undefined);
 });

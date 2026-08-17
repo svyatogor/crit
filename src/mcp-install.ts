@@ -2,7 +2,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFile } from 'child_process';
-import * as which from 'which';
+// Default import, not `* as which`: the package is plain CommonJS, so a real
+// ESM namespace exposes only `default` and `sync` would be undefined.
+import which from 'which';
 import * as vscode from 'vscode';
 
 /**

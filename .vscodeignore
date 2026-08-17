@@ -8,3 +8,4 @@ gen-icon.js
 **/*.map
 **/*.ts
 .gitignore
+tests

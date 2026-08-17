@@ -7,12 +7,23 @@ import {
     threadLabel,
     TrackedCommentThread,
 } from './review-threads';
+import { render, singleLine } from './templates';
+import nudgeDiagnosticsTemplate from './prompts/nudge-diagnostics.md';
+import nudgeMcpTemplate from './prompts/nudge-mcp.md';
+import reviewIntro from './prompts/review-intro.md';
+import reviewIntroCodes from './prompts/review-intro-codes.md';
+import reviewOutroMcp from './prompts/review-outro-mcp.md';
+import reviewOutroTools from './prompts/review-outro-tools.md';
 
 /**
  * Everything this extension says to an agent.
  *
  * Two shapes, for two delivery paths: the full prompt, which inlines the
  * comments and their code context, and the nudge, which points at them.
+ *
+ * The prose lives in markdown templates under `src/prompts/`, so wording can be
+ * edited without touching the assembly code; this file only fills in the
+ * per-review values (codes, files, diff hunks).
  */
 
 /**
@@ -27,42 +38,35 @@ import {
  * dozens of fragments. A nudge sidesteps both: the agent fetches the comments
  * itself, and that fetch is a tool call the user can see.
  *
- * `source` selects how the agent should read them:
+ * `source` selects how the agent discovers the comments:
  *  - `diagnostics` — VS Code's own diagnostics, which the Claude Code CLI can
  *    reach through its IDE integration but the panel cannot.
  *  - `mcp` — this extension's MCP server, reachable from both.
+ *
+ * Either way the agent is told to read the threads through `listDiffComments`:
+ * a diagnostic carries only the request text (see `diagnosticMessage`), so an
+ * agent working from diagnostics alone would miss earlier replies and a
+ * thread's resolved state.
  */
 export function buildNudgeMessage(
     threads: TrackedCommentThread[],
     source: 'diagnostics' | 'mcp',
 ): string {
     const count = threads.length;
-    const subject = `${count} Crit comment${count === 1 ? '' : 's'} ${count === 1 ? 'is' : 'are'} ready`;
+    const subject = `${count} Crit review comment${count === 1 ? '' : 's'} ${count === 1 ? 'is' : 'are'} ready in this workspace.`;
     // Comments spread across several workspace roots would need one code per
     // root; the first thread's code covers the usual single-root case.
     const code = diagnosticCode(threads[0]);
-    const followUp =
-        'Apply each requested change, then use replyToDiffComment to explain what you changed ' +
-        'and resolveDiffComment to mark it done, passing that comment\'s exact code.';
 
     if (source === 'diagnostics') {
-        // Show the code exactly as it appears on the diagnostic — label and all
-        // — so the agent matches what it actually reads. Must stay one line:
-        // sendText submits on every newline.
-        return `${subject} in this workspace. Call getDiagnostics and look for diagnostics whose ` +
-            `source is "Crit" — each one's code field looks like ` +
-            `"${threadLabel(threads[0])} ${code}", where the leading label names the comment and ` +
-            `the rest routes it. ${followUp}`;
+        return singleLine(render(nudgeDiagnosticsTemplate, {
+            subject,
+            label: threadLabel(threads[0]),
+            code,
+        }));
     }
 
-    return [
-        `${subject} in this workspace.`,
-        '',
-        'Read them with listDiffComments from the crit MCP server, using this code:',
-        code,
-        '',
-        `The listing gives each comment its own code. ${followUp}`,
-    ].join('\n');
+    return render(nudgeMcpTemplate, { subject, code });
 }
 
 export async function buildPrompt(
@@ -77,16 +81,9 @@ export async function buildPrompt(
     }
 
     const parts: string[] = [];
-    parts.push(
-        'Apply the following review comments to the code. Each comment includes ' +
-        'the file, line number, surrounding code context, the git diff (if available), and the requested change.\n'
-    );
+    parts.push(render(reviewIntro) + '\n');
     if (includeDiagnosticCodes) {
-        parts.push(
-            'Each comment is labelled with a short review id (R1, R2, …) and its Crit ' +
-            'diagnostic code. Pass the exact code — not the label — to Crit MCP tools; ' +
-            'the label is only for referring to a comment in your own explanations.\n'
-        );
+        parts.push(render(reviewIntroCodes) + '\n');
     }
 
     for (const [uriStr, fileThreads] of byFile) {
@@ -137,20 +134,7 @@ export async function buildPrompt(
         }
     }
 
-    parts.push('---');
-    parts.push('Apply every change above. Keep all other code unchanged.');
-    parts.push('');
-    if (includeDiagnosticCodes) {
-        parts.push('After making the changes, respond via the `crit` MCP server:');
-        parts.push('- `mcp__crit__replyToDiffComment({ code, text })` — explain what you changed for each comment');
-        parts.push('- `mcp__crit__resolveDiffComment({ code })` — mark each comment as done');
-        parts.push('');
-        parts.push('Pass the exact **Diagnostic code** shown with each comment above as `code`. Do not pass the R-label — it is only a display name. If a tool reports a stale or unknown code, call `mcp__crit__listDiffComments({ code })` with any current code to re-read the live threads.');
-    } else {
-        parts.push('After making the changes, use the review tools to respond:');
-        parts.push('- Use #replyToDiffComment (with the comment id shown after R, and text) to explain what you changed for each comment');
-        parts.push('- Use #resolveDiffComment (with the comment id shown after R) to mark each comment as done');
-    }
+    parts.push(render(includeDiagnosticCodes ? reviewOutroMcp : reviewOutroTools));
     return parts.join('\n');
 }
 

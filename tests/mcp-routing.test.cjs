@@ -4,6 +4,9 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+// Lets `src` be required as TypeScript, and stubs `vscode`.
+require('./harness.cjs');
+
 const { spawnSync } = require('node:child_process');
 
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
@@ -13,9 +16,9 @@ const {
     createSessionRef,
     createThreadRef,
     encodeDiagnosticMetadata,
-} = require('../out/diagnostic-metadata.js');
+} = require('../src/diagnostic-metadata.ts');
 
-const registryDir = path.join(os.tmpdir(), 'diff-review', 'instances');
+const registryDir = path.join(os.tmpdir(), 'crit', 'instances');
 
 function startFakeInstance(name, threadRef) {
     const requests = [];
@@ -115,7 +118,7 @@ test('diagnostic codes route MCP calls to the matching VS Code instance', async 
         ),
         stderr: 'pipe',
     });
-    const client = new Client({ name: 'diff-review-routing-test', version: '1.0.0' });
+    const client = new Client({ name: 'crit-routing-test', version: '1.0.0' });
 
     t.after(async () => {
         await client.close().catch(() => {});
@@ -164,7 +167,7 @@ test('diagnostic codes route MCP calls to the matching VS Code instance', async 
         name: 'listDiffComments',
         arguments: { code: staleCode },
     });
-    assert.match(toolText(staleResult), /Missing or stale Diff Review instance descriptor/);
+    assert.match(toolText(staleResult), /Missing or stale Crit instance descriptor/);
     assert.deepEqual(
         [instanceA.requests.length, instanceB.requests.length],
         requestCounts,

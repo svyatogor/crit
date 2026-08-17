@@ -3,6 +3,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+// Lets `src` be required as TypeScript, and stubs `vscode`.
+require('./harness.cjs');
+
 const { spawnSync } = require('node:child_process');
 
 const {
@@ -12,7 +15,7 @@ const {
     readDescriptor,
     resolveLiveInstance,
     sweepIpcRegistry,
-} = require('../out/ipc-registry.js');
+} = require('../src/ipc-registry.ts');
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -23,7 +26,7 @@ function deadPid() {
 }
 
 function registryDir(t) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'diff-review-registry-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'crit-registry-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     return dir;
 }
@@ -148,7 +151,7 @@ test('resolving explains why an instance cannot be reached', t => {
 
     assert.throws(
         () => resolveLiveInstance('aaaaaaaa', dir),
-        /Missing or stale Diff Review instance descriptor/
+        /Missing or stale Crit instance descriptor/
     );
 
     writeDescriptor(dir, 'bbbbbbbb', { pid: deadPid() });

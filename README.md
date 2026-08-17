@@ -225,8 +225,11 @@ src/
 # Install dependencies
 npm install
 
-# Compile and run metadata and MCP routing tests
+# Typecheck, then run the tests
 npm test
+
+# Typecheck only (tsc never emits — esbuild owns every artifact)
+npm run typecheck
 
 # Build extension + MCP server
 npm run build
@@ -236,6 +239,10 @@ npm run build:ext
 
 # Build MCP server only
 npm run build:mcp
+
+# `out/` holds the two shipped bundles and nothing else — esbuild is the only
+# thing that writes there. Tests require `src/*.ts` directly, relying on Node's
+# native type stripping, so there is no second build to keep in sync.
 
 # Package vsix
 npx @vscode/vsce package --no-dependencies --allow-missing-repository
