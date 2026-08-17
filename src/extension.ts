@@ -12,6 +12,7 @@ import {
     clearThreads,
     diagnosticCode,
     diagnosticMessage,
+    findThreadByRef,
     findThreadForComment,
     isResolved,
     openThreads,
@@ -23,7 +24,7 @@ import {
     serializeState,
     setThreadsChangedHandler,
     threadLabel,
-    threadMap,
+    threadsByRef,
     TrackedCommentThread,
     trackThread,
     unresolveThread,
@@ -32,12 +33,12 @@ import {
 
 // --------------- Helpers ---------------
 
-function getThreadsByFile(): Map<string, { id: number; thread: TrackedCommentThread }[]> {
-    const byFile = new Map<string, { id: number; thread: TrackedCommentThread }[]>();
-    for (const [id, thread] of threadMap) {
+function getThreadsByFile(): Map<string, TrackedCommentThread[]> {
+    const byFile = new Map<string, TrackedCommentThread[]>();
+    for (const thread of threadsByRef.values()) {
         const rel = vscode.workspace.asRelativePath(thread.uri);
         if (!byFile.has(rel)) byFile.set(rel, []);
-        byFile.get(rel)!.push({ id, thread });
+        byFile.get(rel)!.push(thread);
     }
     return byFile;
 }
@@ -52,7 +53,7 @@ function refreshDiagnostics() {
     if (!diagnosticCollection) return;
 
     const byUri = new Map<string, { uri: vscode.Uri; diagnostics: vscode.Diagnostic[] }>();
-    for (const thread of threadMap.values()) {
+    for (const thread of threadsByRef.values()) {
         if (isResolved(thread)) continue;
 
         const uriKey = thread.uri.toString();
@@ -92,7 +93,7 @@ let statusBar: vscode.StatusBarItem;
 let diagnosticCollection: vscode.DiagnosticCollection | undefined;
 
 function refresh() {
-    const n = threadMap.size;
+    const n = threadsByRef.size;
     const open = openThreads().length;
     if (n > 0) {
         statusBar.text = `$(comment-discussion) ${open} open · ${n - open} resolved`;
@@ -153,7 +154,7 @@ function getAiProvider(): AiProvider {
  */
 function findClaudeCodeTerminal(): vscode.Terminal | undefined {
     const expected = process.env.CLAUDE_CODE_TERMINAL_TITLE || 'Claude Code';
-    const matches = vscode.window.terminals.filter(t => t.name.includes(expected));
+    const matches = vscode.window.terminals.filter(t => t.name.includes(expected) || t.name.startsWith('✳ '));
     if (matches.length === 0) return undefined;
 
     // Prefer the focused one when several are open.
@@ -312,14 +313,14 @@ function switchToBranch(controller: vscode.CommentController, newKey: string) {
     if (newData && newData.threads && newData.threads.length > 0) {
         // New branch has its own saved comments — load them
         loadStateFromKey(controller, newKey);
-        outputLog.appendLine(`[Crit] Loaded ${threadMap.size} comments for branch ${newKey}`);
+        outputLog.appendLine(`[Crit] Loaded ${threadsByRef.size} comments for branch ${newKey}`);
     } else {
         // New branch has no saved comments — copy from the old branch (Option B)
         loadStateFromKey(controller, oldKey);
-        if (threadMap.size > 0) {
+        if (threadsByRef.size > 0) {
             // Save the copied state under the new branch key
             saveState();
-            outputLog.appendLine(`[Crit] Inherited ${threadMap.size} comments from ${oldKey} to ${newKey}`);
+            outputLog.appendLine(`[Crit] Inherited ${threadsByRef.size} comments from ${oldKey} to ${newKey}`);
         } else {
             outputLog.appendLine(`[Crit] No comments to inherit — clean slate for ${newKey}`);
         }
@@ -368,7 +369,7 @@ function setupLineTracking(context: vscode.ExtensionContext) {
             // Only track changes for documents that have comment threads
             const docUri = e.document.uri.toString();
             const affected: TrackedCommentThread[] = [];
-            for (const thread of threadMap.values()) {
+            for (const thread of threadsByRef.values()) {
                 if (thread.uri.toString() === docUri) affected.push(thread);
             }
             if (affected.length === 0) return;
@@ -459,7 +460,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     try {
         loadStateFromKey(controller, currentBranchKey);
-        outputLog.appendLine(`[Crit] Loaded ${threadMap.size} persisted threads for ${currentBranchKey}`);
+        outputLog.appendLine(`[Crit] Loaded ${threadsByRef.size} persisted threads for ${currentBranchKey}`);
     } catch (e: any) {
         outputLog.appendLine(`[Crit] Error loading state: ${e.message}`);
     }
@@ -596,7 +597,7 @@ export function activate(context: vscode.ExtensionContext) {
     // --- Delete all resolved ---
     context.subscriptions.push(
         vscode.commands.registerCommand('crit.deleteResolved', async () => {
-            const resolved = [...threadMap.values()].filter(isResolved);
+            const resolved = [...threadsByRef.values()].filter(isResolved);
             if (resolved.length === 0) { vscode.window.showInformationMessage('No resolved comments to delete.'); return; }
             const answer = await vscode.window.showWarningMessage(
                 `Delete ${resolved.length} resolved comment${resolved.length !== 1 ? 's' : ''}?`, { modal: true }, 'Delete'
@@ -611,9 +612,9 @@ export function activate(context: vscode.ExtensionContext) {
     // --- Clear all ---
     context.subscriptions.push(
         vscode.commands.registerCommand('crit.clearAll', async () => {
-            if (threadMap.size === 0) return;
+            if (threadsByRef.size === 0) return;
             const answer = await vscode.window.showWarningMessage(
-                `Delete all ${threadMap.size} review comment${threadMap.size !== 1 ? 's' : ''}?`, { modal: true }, 'Delete All'
+                `Delete all ${threadsByRef.size} review comment${threadsByRef.size !== 1 ? 's' : ''}?`, { modal: true }, 'Delete All'
             );
             if (answer !== 'Delete All') return;
             clearThreads();
@@ -651,9 +652,9 @@ export function activate(context: vscode.ExtensionContext) {
     // --- File-level batch: delete resolved in file ---
     context.subscriptions.push(
         vscode.commands.registerCommand('crit.deleteResolvedFile', async (fileKey: string) => {
-            const entries = getThreadsByFile().get(fileKey);
-            if (!entries) return;
-            const resolved = entries.map(e => e.thread).filter(isResolved);
+            const threads = getThreadsByFile().get(fileKey);
+            if (!threads) return;
+            const resolved = threads.filter(isResolved);
             if (resolved.length === 0) { vscode.window.showInformationMessage('No resolved comments in this file.'); return; }
             const answer = await vscode.window.showWarningMessage(
                 `Delete ${resolved.length} resolved comment${resolved.length !== 1 ? 's' : ''} in ${fileKey}?`, { modal: true }, 'Delete'
@@ -703,9 +704,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 /** Open threads in `fileKey`, or undefined when the file has no threads. */
 function openThreadsInFile(fileKey: string): TrackedCommentThread[] | undefined {
-    const entries = getThreadsByFile().get(fileKey);
-    if (!entries) return undefined;
-    return entries.map(e => e.thread).filter(thread => !isResolved(thread));
+    const threads = getThreadsByFile().get(fileKey);
+    if (!threads) return undefined;
+    return threads.filter(thread => !isResolved(thread));
 }
 
 function setCommentMode(commentId: number, mode: vscode.CommentMode): boolean {
@@ -721,20 +722,20 @@ function setCommentMode(commentId: number, mode: vscode.CommentMode): boolean {
 // --------------- Interactive QuickPick Panel ---------------
 
 async function showCommentPanel() {
-    if (threadMap.size === 0) {
+    if (threadsByRef.size === 0) {
         vscode.window.showInformationMessage('No review comments.');
         return;
     }
 
     interface ActionItem extends vscode.QuickPickItem {
         action?: string;
-        threadId?: number;
+        threadRef?: string;
         fileKey?: string;
     }
 
     const qp = vscode.window.createQuickPick<ActionItem>();
     const openCount = openThreads().length;
-    const resolvedCount = threadMap.size - openCount;
+    const resolvedCount = threadsByRef.size - openCount;
     qp.title = `Review Comments (${openCount} open, ${resolvedCount} resolved)`;
     qp.placeholder = 'Type to search comments… Select an action or comment.';
     qp.matchOnDescription = true;
@@ -749,18 +750,18 @@ async function showCommentPanel() {
             { label: '$(clippy) Copy All Open to Clipboard', description: `${openCount} open`, action: 'copyAll' },
             { label: '$(check-all) Resolve All', description: `${openCount} open`, action: 'resolveAll' },
             { label: '$(trash) Delete All Resolved', description: `${resolvedCount} resolved`, action: 'deleteResolved' },
-            { label: '$(clear-all) Clear All', description: `${threadMap.size} total`, action: 'clearAll' },
+            { label: '$(clear-all) Clear All', description: `${threadsByRef.size} total`, action: 'clearAll' },
             { label: '', kind: vscode.QuickPickItemKind.Separator },
         );
 
         const byFile = getThreadsByFile();
 
-        for (const [file, entries] of byFile) {
-            const sorted = entries.sort((a, b) => a.thread.range.start.line - b.thread.range.start.line);
+        for (const [file, fileThreads] of byFile) {
+            const sorted = fileThreads.sort((a, b) => a.range.start.line - b.range.start.line);
 
             // Filter: check if any comment in this file matches
-            const matchingEntries = lf
-                ? sorted.filter(({ thread }) => {
+            const matching = lf
+                ? sorted.filter(thread => {
                     const texts = thread.comments.map(c =>
                         typeof c.body === 'string' ? c.body : c.body.value
                     ).join(' ').toLowerCase();
@@ -768,10 +769,10 @@ async function showCommentPanel() {
                 })
                 : sorted;
 
-            if (matchingEntries.length === 0) continue;
+            if (matching.length === 0) continue;
 
-            const fileOpen = matchingEntries.filter(e => !isResolved(e.thread)).length;
-            const fileResolved = matchingEntries.length - fileOpen;
+            const fileOpen = matching.filter(thread => !isResolved(thread)).length;
+            const fileResolved = matching.length - fileOpen;
 
             // File header with batch actions
             items.push({ label: `📁 ${file}  (${fileOpen} open, ${fileResolved} resolved)`, kind: vscode.QuickPickItemKind.Separator });
@@ -783,7 +784,7 @@ async function showCommentPanel() {
             );
 
             // Individual comments
-            for (const { id, thread } of matchingEntries) {
+            for (const thread of matching) {
                 const line = thread.range.start.line + 1;
                 const preview = threadPreview(thread);
                 const status = isResolved(thread) ? '✅' : '💬';
@@ -793,7 +794,7 @@ async function showCommentPanel() {
                 items.push({
                     label: `    ${status} L${line}: ${preview}`,
                     description: `${roles}${replyInfo ? '  ' + replyInfo : ''}`,
-                    threadId: id,
+                    threadRef: thread.threadRef,
                     action: 'commentAction',
                 });
             }
@@ -839,7 +840,7 @@ async function showCommentPanel() {
                 if (pick.fileKey) await vscode.commands.executeCommand('crit.deleteResolvedFile', pick.fileKey);
                 break;
             case 'commentAction':
-                if (pick.threadId !== undefined) await showCommentActions(pick.threadId);
+                if (pick.threadRef !== undefined) await showCommentActions(pick.threadRef);
                 break;
         }
     });
@@ -849,8 +850,8 @@ async function showCommentPanel() {
 
 // --------------- Per-Comment Action Submenu ---------------
 
-async function showCommentActions(threadId: number) {
-    const thread = threadMap.get(threadId);
+async function showCommentActions(threadRef: string) {
+    const thread = findThreadByRef(threadRef);
     if (!thread) return;
 
     const rel = vscode.workspace.asRelativePath(thread.uri);

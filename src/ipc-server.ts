@@ -18,7 +18,7 @@ import {
     resolveThread,
     ReviewComment,
     serializeState,
-    threadMap,
+    threadsByRef,
     threadsChanged,
     unresolveThread,
     untrackThread,
@@ -170,7 +170,7 @@ export function startIpcServer(
                     res.writeHead(200);
                     res.end(JSON.stringify({
                         ok: true,
-                        comments: threadMap.size,
+                        comments: threadsByRef.size,
                         sessionRef: getSessionRef(),
                     }));
                 } else {

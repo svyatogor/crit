@@ -200,7 +200,7 @@
         "displayName": "List Crit Comments",
         "toolReferenceName": "listDiffComments",
         "icon": "$(comment)",
-        "modelDescription": "Lists all inline review comments with their IDs, file locations, status (open/resolved), and full thread text including user and agent replies. Use this to see what review feedback exists.",
+        "modelDescription": "Lists all inline review comments with their threadRef, file locations, status (open/resolved), and full thread text including user and agent replies. Use this to see what review feedback exists and to get the threadRef needed by the other Crit tools.",
         "canBeReferencedInPrompt": true,
         "inputSchema": {
           "type": "object",
@@ -217,9 +217,9 @@
         "inputSchema": {
           "type": "object",
           "properties": {
-            "commentId": {
-              "type": "number",
-              "description": "The ID number of the comment thread to reply to (from listComments output, e.g. #1, #2)"
+            "threadRef": {
+              "type": "string",
+              "description": "The threadRef of the comment thread to reply to (from the listComments output)"
             },
             "text": {
               "type": "string",
@@ -227,7 +227,7 @@
             }
           },
           "required": [
-            "commentId",
+            "threadRef",
             "text"
           ]
         }
@@ -242,13 +242,13 @@
         "inputSchema": {
           "type": "object",
           "properties": {
-            "commentId": {
-              "type": "number",
-              "description": "The ID number of the comment thread to resolve"
+            "threadRef": {
+              "type": "string",
+              "description": "The threadRef of the comment thread to resolve (from the listComments output)"
             }
           },
           "required": [
-            "commentId"
+            "threadRef"
           ]
         }
       },
@@ -262,13 +262,13 @@
         "inputSchema": {
           "type": "object",
           "properties": {
-            "commentId": {
-              "type": "number",
-              "description": "The ID number of the comment thread to delete"
+            "threadRef": {
+              "type": "string",
+              "description": "The threadRef of the comment thread to delete (from the listComments output)"
             }
           },
           "required": [
-            "commentId"
+            "threadRef"
           ]
         }
       }

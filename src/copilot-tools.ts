@@ -1,11 +1,12 @@
 import * as vscode from 'vscode';
 import {
     commentText,
+    findThreadByRef,
     isResolved,
     resolveThread,
     ReviewComment,
     threadLabel,
-    threadMap,
+    threadsByRef,
     threadsChanged,
     untrackThread,
 } from './review-threads';
@@ -13,10 +14,10 @@ import {
 /**
  * Language model tools for GitHub Copilot.
  *
- * Copilot addresses a comment by its display id (the number in R1, R2, …)
- * rather than by `threadRef`: the ids are what the prompt shows it, and the
- * tools run inside this window, so the cross-window routing the MCP server
- * needs does not apply here.
+ * Copilot addresses a comment by its `threadRef`, exactly as the MCP server
+ * does — the display label (R1, R2, …) is a per-branch sequence, so keying on it
+ * would let a stale number land on whatever thread now holds it. A stale
+ * `threadRef` instead fails loudly.
  */
 
 export function registerTools(context: vscode.ExtensionContext) {
@@ -34,15 +35,23 @@ function textResult(text: string): vscode.LanguageModelToolResult {
     return new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(text)]);
 }
 
+function notFoundResult(threadRef: unknown): vscode.LanguageModelToolResult {
+    return textResult(
+        typeof threadRef === 'string' && threadRef.length > 0
+            ? `Thread with threadRef "${threadRef}" not found. Call crit_listComments for current refs.`
+            : 'Thread not found: threadRef must be a non-empty string.'
+    );
+}
+
 class ListCommentsTool implements vscode.LanguageModelTool<{}> {
     async invoke(
         _options: vscode.LanguageModelToolInvocationOptions<{}>,
         _token: vscode.CancellationToken
     ): Promise<vscode.LanguageModelToolResult> {
-        if (threadMap.size === 0) return textResult('No review comments.');
+        if (threadsByRef.size === 0) return textResult('No review comments.');
 
         const lines: string[] = [];
-        for (const [id, thread] of threadMap) {
+        for (const thread of threadsByRef.values()) {
             const rel = vscode.workspace.asRelativePath(thread.uri);
             const line = thread.range.start.line + 1;
             const status = isResolved(thread) ? 'RESOLVED' : 'OPEN';
@@ -50,59 +59,62 @@ class ListCommentsTool implements vscode.LanguageModelTool<{}> {
                 const role = (c as ReviewComment).role || 'user';
                 return `  [${role}] ${commentText(c)}`;
             }).join('\n');
-            lines.push(`${threadLabel(thread)} (id ${id}) | ${rel}:${line} | ${status}\n${comments}`);
+            lines.push(
+                `${threadLabel(thread)} | ${rel}:${line} | ${status}` +
+                `\nthreadRef: ${thread.threadRef}\n${comments}`
+            );
         }
         return textResult(lines.join('\n\n'));
     }
 }
 
-interface ReplyParams { commentId: number; text: string; }
+interface ThreadRefParam { threadRef: string; }
+
+interface ReplyParams extends ThreadRefParam { text: string; }
 
 class ReplyToCommentTool implements vscode.LanguageModelTool<ReplyParams> {
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<ReplyParams>,
         _token: vscode.CancellationToken
     ): Promise<vscode.LanguageModelToolResult> {
-        const { commentId, text } = options.input;
-        const thread = threadMap.get(commentId);
-        if (!thread) return textResult(`Comment #${commentId} not found.`);
+        const { threadRef, text } = options.input;
+        const thread = findThreadByRef(threadRef);
+        if (!thread) return notFoundResult(threadRef);
 
         thread.comments = [...thread.comments, new ReviewComment(text, 'agent')];
         thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
         threadsChanged();
-        return textResult(`Replied to comment #${commentId} as agent.`);
+        return textResult(`Replied to thread ${threadRef} as agent.`);
     }
 }
 
-interface CommentIdParam { commentId: number; }
-
-class ResolveCommentTool implements vscode.LanguageModelTool<CommentIdParam> {
+class ResolveCommentTool implements vscode.LanguageModelTool<ThreadRefParam> {
     async invoke(
-        options: vscode.LanguageModelToolInvocationOptions<CommentIdParam>,
+        options: vscode.LanguageModelToolInvocationOptions<ThreadRefParam>,
         _token: vscode.CancellationToken
     ): Promise<vscode.LanguageModelToolResult> {
-        const { commentId } = options.input;
-        const thread = threadMap.get(commentId);
-        if (!thread) return textResult(`Comment #${commentId} not found.`);
+        const { threadRef } = options.input;
+        const thread = findThreadByRef(threadRef);
+        if (!thread) return notFoundResult(threadRef);
 
         resolveThread(thread);
         threadsChanged();
-        return textResult(`Comment #${commentId} resolved.`);
+        return textResult(`Thread ${threadRef} resolved.`);
     }
 }
 
-class DeleteCommentTool implements vscode.LanguageModelTool<CommentIdParam> {
+class DeleteCommentTool implements vscode.LanguageModelTool<ThreadRefParam> {
     async invoke(
-        options: vscode.LanguageModelToolInvocationOptions<CommentIdParam>,
+        options: vscode.LanguageModelToolInvocationOptions<ThreadRefParam>,
         _token: vscode.CancellationToken
     ): Promise<vscode.LanguageModelToolResult> {
-        const { commentId } = options.input;
-        const thread = threadMap.get(commentId);
-        if (!thread) return textResult(`Comment #${commentId} not found.`);
+        const { threadRef } = options.input;
+        const thread = findThreadByRef(threadRef);
+        if (!thread) return notFoundResult(threadRef);
 
         untrackThread(thread);
         thread.dispose();
         threadsChanged();
-        return textResult(`Comment #${commentId} deleted.`);
+        return textResult(`Thread ${threadRef} deleted.`);
     }
 }

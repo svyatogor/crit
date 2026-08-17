@@ -51,6 +51,7 @@ export interface SerializedState {
 
 export interface TrackedCommentThread extends vscode.CommentThread {
     range: vscode.Range;
+    /** Display only — see `threadLabel`. Address a thread by `threadRef`. */
     threadId: number;
     threadRef: string;
 }
@@ -104,8 +105,15 @@ export function threadsChanged(): void {
 
 // --------------- Thread Tracking ---------------
 
-export const threadMap = new Map<number, TrackedCommentThread>();
-const threadsByRef = new Map<string, TrackedCommentThread>();
+/**
+ * Every tracked thread, keyed by `threadRef` — the single index.
+ *
+ * `threadId` stays on the thread as a display field (see `threadLabel`), but it
+ * is never an index: it is a per-branch sequence that repeats across branches,
+ * so keying on it would let a stale number silently address whatever thread now
+ * holds it.
+ */
+export const threadsByRef = new Map<string, TrackedCommentThread>();
 let nextThreadId = 1;
 
 export function trackThread(
@@ -123,7 +131,6 @@ export function trackThread(
 
     trackedThread.threadId = tid;
     trackedThread.threadRef = threadRef;
-    threadMap.set(tid, trackedThread);
     threadsByRef.set(threadRef, trackedThread);
     return trackedThread;
 }
@@ -133,7 +140,6 @@ export function isTrackedThread(thread: vscode.CommentThread): thread is Tracked
     return thread.range !== undefined
         && typeof candidate.threadId === 'number'
         && typeof candidate.threadRef === 'string'
-        && threadMap.get(candidate.threadId) === thread
         && threadsByRef.get(candidate.threadRef) === thread;
 }
 
@@ -149,12 +155,11 @@ export function findThreadByRef(threadRef: unknown): TrackedCommentThread | unde
 }
 
 export function untrackThread(thread: TrackedCommentThread): void {
-    threadMap.delete(thread.threadId);
     threadsByRef.delete(thread.threadRef);
 }
 
 export function findThreadForComment(commentId: number): TrackedCommentThread | undefined {
-    for (const thread of threadMap.values()) {
+    for (const thread of threadsByRef.values()) {
         if (thread.comments.some(c => (c as ReviewComment).id === commentId)) {
             return thread;
         }
@@ -163,8 +168,7 @@ export function findThreadForComment(commentId: number): TrackedCommentThread | 
 }
 
 export function clearThreads(): void {
-    for (const thread of threadMap.values()) thread.dispose();
-    threadMap.clear();
+    for (const thread of threadsByRef.values()) thread.dispose();
     threadsByRef.clear();
     nextThreadId = 1;
     nextCommentId = 1;
@@ -189,7 +193,7 @@ export function isResolved(thread: vscode.CommentThread): boolean {
 }
 
 export function openThreads(): TrackedCommentThread[] {
-    return [...threadMap.values()].filter(thread => !isResolved(thread));
+    return [...threadsByRef.values()].filter(thread => !isResolved(thread));
 }
 
 export function commentText(comment: vscode.Comment): string {
@@ -283,10 +287,10 @@ export function serializeState(
     includeThread: (thread: TrackedCommentThread) => boolean = () => true,
 ): SerializedState {
     const threads: SerializedThread[] = [];
-    for (const [id, thread] of threadMap) {
+    for (const thread of threadsByRef.values()) {
         if (!includeThread(thread)) continue;
         threads.push({
-            id,
+            id: thread.threadId,
             threadRef: thread.threadRef,
             uri: thread.uri.toString(),
             startLine: thread.range.start.line,
