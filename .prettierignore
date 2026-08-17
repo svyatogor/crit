@@ -1,0 +1,9 @@
+node_modules/
+out/
+.vscode-test/
+*.vsix
+package-lock.json
+CHANGELOG.md
+
+# Prompt payloads sent verbatim to the agent — reflowing them changes the prompt.
+src/prompts/*.md

@@ -1,6 +1,6 @@
-import * as vscode from 'vscode';
-import { sendMessageToSocket } from './claude-messaging';
-import { ClaudeSession, findSessionForWorkspace } from './claude-sessions';
+import * as vscode from 'vscode'
+import { sendMessageToSocket } from './claude-messaging'
+import { type ClaudeSession, findSessionForWorkspace } from './claude-sessions'
 
 /**
  * Getting a message in front of Claude Code, wherever it happens to be running.
@@ -18,17 +18,17 @@ import { ClaudeSession, findSessionForWorkspace } from './claude-sessions';
  */
 
 export interface ClaudeDelivery {
-    terminal: string;
-    message: string;
-    editor: string;
+  terminal: string
+  message: string
+  editor: string
 }
 
-export type DeliveryPath = 'terminal' | 'session' | 'editor';
+export type DeliveryPath = 'terminal' | 'session' | 'editor'
 
 export interface DeliveryResult {
-    path: DeliveryPath;
-    /** Set on the `session` path, for callers that name where the text went. */
-    session?: ClaudeSession;
+  path: DeliveryPath
+  /** Set on the `session` path, for callers that name where the text went. */
+  session?: ClaudeSession
 }
 
 /**
@@ -40,34 +40,34 @@ export interface DeliveryResult {
  * shell would execute it.
  */
 export function findClaudeCodeTerminal(): vscode.Terminal | undefined {
-    const expected = process.env.CLAUDE_CODE_TERMINAL_TITLE || 'Claude Code';
-    const matches = vscode.window.terminals.filter(t => t.name.includes(expected) || t.name.startsWith('✳ '));
-    if (matches.length === 0) return undefined;
+  const expected = process.env.CLAUDE_CODE_TERMINAL_TITLE || 'Claude Code'
+  const matches = vscode.window.terminals.filter((t) => t.name.includes(expected) || t.name.startsWith('✳ '))
+  if (matches.length === 0) return undefined
 
-    // Prefer the focused one when several are open.
-    const active = vscode.window.activeTerminal;
-    if (active && matches.includes(active)) return active;
-    return matches[matches.length - 1];
+  // Prefer the focused one when several are open.
+  const active = vscode.window.activeTerminal
+  if (active && matches.includes(active)) return active
+  return matches[matches.length - 1]
 }
 
 /** The Claude Code session running in this workspace, if there is one. */
 export function findWorkspaceClaudeSession(): ClaudeSession | undefined {
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder || folder.uri.scheme !== 'file') return undefined;
+  const folder = vscode.workspace.workspaceFolders?.[0]
+  if (!folder || folder.uri.scheme !== 'file') return undefined
 
-    try {
-        return findSessionForWorkspace(folder.uri.fsPath, {
-            // Guards the case where VS Code itself was launched from a Claude
-            // session: that session must not review its own comments.
-            excludeSessionId: process.env.CLAUDE_CODE_SESSION_ID,
-        });
-    } catch {
-        return undefined;
-    }
+  try {
+    return findSessionForWorkspace(folder.uri.fsPath, {
+      // Guards the case where VS Code itself was launched from a Claude
+      // session: that session must not review its own comments.
+      excludeSessionId: process.env.CLAUDE_CODE_SESSION_ID,
+    })
+  } catch {
+    return undefined
+  }
 }
 
 export function sessionLabel(session: ClaudeSession): string {
-    return session.name ?? session.sessionId.slice(0, 8);
+  return session.name ?? session.sessionId.slice(0, 8)
 }
 
 /**
@@ -80,34 +80,28 @@ export function sessionLabel(session: ClaudeSession): string {
  *     a session it already hosts ("Your prompt was not applied").
  */
 export async function deliverToClaudeCode(
-    delivery: ClaudeDelivery,
-    log: vscode.OutputChannel,
+  delivery: ClaudeDelivery,
+  log: vscode.OutputChannel,
 ): Promise<DeliveryResult> {
-    const terminal = findClaudeCodeTerminal();
-    if (terminal) {
-        terminal.show();
-        terminal.sendText(delivery.terminal, true);
-        return { path: 'terminal' };
-    }
+  const terminal = findClaudeCodeTerminal()
+  if (terminal) {
+    terminal.show()
+    terminal.sendText(delivery.terminal, true)
+    return { path: 'terminal' }
+  }
 
-    const session = findWorkspaceClaudeSession();
-    if (session) {
-        try {
-            await sendMessageToSocket(session.messagingSocketPath, delivery.message);
-            return { path: 'session', session };
-        } catch (error: any) {
-            // The session can exit between discovery and delivery; opening a
-            // new conversation still gets the text in front of the user.
-            log.appendLine(
-                `[Crit] Cross-session delivery failed, opening a new conversation: ${error.message}`,
-            );
-        }
+  const session = findWorkspaceClaudeSession()
+  if (session) {
+    try {
+      await sendMessageToSocket(session.messagingSocketPath, delivery.message)
+      return { path: 'session', session }
+    } catch (error: any) {
+      // The session can exit between discovery and delivery; opening a
+      // new conversation still gets the text in front of the user.
+      log.appendLine(`[Crit] Cross-session delivery failed, opening a new conversation: ${error.message}`)
     }
+  }
 
-    await vscode.commands.executeCommand(
-        'claude-vscode.primaryEditor.open',
-        undefined,
-        delivery.editor,
-    );
-    return { path: 'editor' };
+  await vscode.commands.executeCommand('claude-vscode.primaryEditor.open', undefined, delivery.editor)
+  return { path: 'editor' }
 }

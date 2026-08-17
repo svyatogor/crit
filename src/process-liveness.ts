@@ -8,18 +8,18 @@
  * because these registries are host-local.
  */
 export function isProcessAlive(pid: number): boolean {
-    if (!Number.isInteger(pid) || pid <= 0) return false;
-    try {
-        // Signal 0 performs the permission and existence checks without
-        // delivering a signal.
-        process.kill(pid, 0);
-        return true;
-    } catch (error: unknown) {
-        // EPERM means the process exists but belongs to another user.
-        return isErrnoException(error) && error.code === 'EPERM';
-    }
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    // Signal 0 performs the permission and existence checks without
+    // delivering a signal.
+    process.kill(pid, 0)
+    return true
+  } catch (error: unknown) {
+    // EPERM means the process exists but belongs to another user.
+    return isErrnoException(error) && error.code === 'EPERM'
+  }
 }
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-    return error instanceof Error && 'code' in error;
+  return error instanceof Error && 'code' in error
 }

@@ -11,17 +11,21 @@ Add review comments on any line in any file, then submit them all to Copilot, Cl
 ## Quick Start
 
 ### 1. Add Review Comments
+
 Open any file → hover on the line gutter → click the **`+`** icon → type your feedback (e.g., "rename this variable", "add error handling") → click **Add Comment**.
 
 ### 2. Review & Manage
+
 Click the **status bar** (`💬 2 open · 1 resolved`) to open the **comment panel** — search, filter, batch-resolve, or navigate to any comment.
 
 ### 3. Submit to AI
+
 - **Send to AI** — click the 📤 button on any thread or use the comment panel to send all open comments to your configured provider
 - **Copy to Clipboard** — click 📋 to copy the structured prompt, then paste into Claude Code, Codex, or any AI chat
 - **MCP Server** — Claude Code connects directly via MCP for real-time comment interaction
 
 ### 4. Or Have the AI Review You
+
 Run **`Crit: Ask AI to Review Changes`** (or **`…Review This File`**) and the AI reviews your code and leaves its findings as inline comments you can reply to, resolve, or send straight back to be fixed. Needs the Claude Code provider — see [Ask the AI to Review Your Code](#ask-the-ai-to-review-your-code).
 
 The default provider is **GitHub Copilot**. To use **Claude Code**, set **Crit: AI Provider** (`crit.aiProvider`) to `Claude Code` in VS Code settings. Send actions read this setting when invoked, so switching providers does not require a reload. Claude Code prompts include each comment's diagnostic code, preserving its VS Code window, project, and thread references for subsequent Crit MCP calls. Copilot prompts remain unchanged. If the selected provider cannot be opened, Crit copies the prompt to the clipboard instead.
@@ -33,6 +37,7 @@ The default provider is **GitHub Copilot**. To use **Claude Code**, set **Crit: 
 ![Inline Comments](examples/screenshot-inline.png)
 
 ### Inline Commenting on Any File
+
 - **"+" gutter buttons** on every line — add comments on any file type (not just markdown)
 - **Threaded replies** with **👤 User** and **🤖 Agent** role badges
 - **Edit** comments inline, **resolve/reopen** threads, **delete** individual replies
@@ -40,21 +45,26 @@ The default provider is **GitHub Copilot**. To use **Claude Code**, set **Crit: 
 - **Copy to Clipboard** button for pasting into any AI chat
 
 ### Git Diff Context in Prompts
+
 When you submit comments, the prompt includes the **git diff hunk** for each commented line — showing what was added, removed, and changed. The AI sees both the current code and the change history:
 
 ```
 ### Line 15
 ```
+
 → 15 | const userData = await fetchUser(id);
-```
+
+````
 **Git diff:**
 ```diff
 @@ -13,5 +13,5 @@
 -const data = fetch('/api/user/' + id);
 +const userData = await fetchUser(id);
-```
+````
+
 **Comment:** Good rename, but add error handling for the await
-```
+
+````
 
 ### Comment Panel (Status Bar)
 
@@ -100,33 +110,35 @@ Every open review thread is also published as a VS Code **Information** diagnost
 
 ```text
 R3 crit:v1;<session>;<project>;<thread>
-```
+````
 
 The leading `R3` is a display label — the same id used in generated prompts and in `listDiffComments` output, so a comment can be referred to by name in conversation. It is **never an address**: all tools route on the thread ref inside the code, because review labels are per-branch sequence numbers and are reused across branches.
 
-| Field | Lifetime and purpose |
-|---|---|
-| `session` | Random identifier for the current extension-host/window activation; changes after reload or restart |
-| `project` | Stable hash of the containing workspace-folder identity; distinct per root in multi-root workspaces and does not expose its path |
-| `thread` | Stable random identifier persisted with the review thread across reloads and branch inheritance — omitted by a project code, which addresses a window and project only |
+| Field     | Lifetime and purpose                                                                                                                                                   |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `session` | Random identifier for the current extension-host/window activation; changes after reload or restart                                                                    |
+| `project` | Stable hash of the containing workspace-folder identity; distinct per root in multi-root workspaces and does not expose its path                                       |
+| `thread`  | Stable random identifier persisted with the review thread across reloads and branch inheritance — omitted by a project code, which addresses a window and project only |
 
 Each ref is 8 hex characters. They are routing metadata, **not authentication credentials**, so they carry only enough entropy to stay unique across the windows, projects, and threads on one machine — keeping `Diagnostic.code` short enough to read in the Problems view.
 
 `Diagnostic.code` is a plain string by design. The object form (`{value, target}`) renders more compactly in the Problems view, but AI integrations that read diagnostics stringify this field and would receive `[object Object]`. AI integrations must preserve the code; the MCP server uses its fields to select the owning VS Code window, project, and thread. Tools also accept a code pasted with its `R3 ` prefix intact.
 
 ### 4 Copilot Language Model Tools
+
 Enable in **Agent Mode → Tools** to let Copilot interact with your review comments:
 
 ![Agent Reply](examples/screenshot-agent.png)
 
-| Tool | Description |
-|---|---|
-| `#listDiffComments` | List all comments with IDs, file locations, status, and thread text |
-| `#replyToDiffComment` | Reply to a comment as the agent role |
-| `#resolveDiffComment` | Mark a comment as resolved/done |
-| `#deleteDiffComment` | Delete a comment thread |
+| Tool                  | Description                                                         |
+| --------------------- | ------------------------------------------------------------------- |
+| `#listDiffComments`   | List all comments with IDs, file locations, status, and thread text |
+| `#replyToDiffComment` | Reply to a comment as the agent role                                |
+| `#resolveDiffComment` | Mark a comment as resolved/done                                     |
+| `#deleteDiffComment`  | Delete a comment thread                                             |
 
 **Example workflow:**
+
 ```
 User: "Address all my review comments"
 Agent: [calls #listDiffComments] → sees 3 open comments
@@ -136,6 +148,7 @@ Agent: [calls #listDiffComments] → sees 3 open comments
 ```
 
 ### MCP Server (Claude Code, Cursor, Windsurf, etc.)
+
 The extension includes a standalone MCP server that any MCP-compatible AI client can connect to for real-time access to review comments. Available tools: `listDiffComments`, `addDiffComment`, `replyToDiffComment`, `resolveDiffComment`, `deleteDiffComment`.
 
 Every MCP tool takes a `code`. A **thread code** comes from a Crit diagnostic and identifies the VS Code window, the workspace project, and one review thread:
@@ -150,7 +163,7 @@ A **project code** drops the thread segment and identifies just the window and p
 crit:v1;<session>;<project>
 ```
 
-That shorter form exists because [a review request](#ask-the-ai-to-review-your-code) has to be addressable before any comment exists — the agent is being asked to *create* the threads, so there is no thread to name yet.
+That shorter form exists because [a review request](#ask-the-ai-to-review-your-code) has to be addressable before any comment exists — the agent is being asked to _create_ the threads, so there is no thread to name yet.
 
 - `listDiffComments({ code })` routes to the encoded window and lists comments from the encoded project — either code shape
 - `addDiffComment({ code, file, line, endLine?, text })` creates a new comment thread in the encoded project — either code shape; answers with the new thread's own code
@@ -167,7 +180,7 @@ Always pass a current diagnostic code unchanged. A code from a closed or reloade
 **Claude Code:**
 Run **Crit: Install MCP Server for Claude Code** from the Command Palette. It registers the server as `crit` at **user** scope, so it is available in every directory, and re-running it repairs a stale entry.
 
-The path it registers is *not* inside the extension directory — that directory carries the version (`svyatogor.crit-<version>`) and would move on every update. The extension instead stages the bundle to a fixed path on activation and registers that:
+The path it registers is _not_ inside the extension directory — that directory carries the version (`svyatogor.crit-<version>`) and would move on every update. The extension instead stages the bundle to a fixed path on activation and registers that:
 
 ```text
 ~/.crit/mcp/mcp-server.js
@@ -176,6 +189,7 @@ The path it registers is *not* inside the extension directory — that directory
 An extension update replaces the staged copy in place, so **updating Crit never requires re-installing the MCP server**.
 
 To register it by hand instead:
+
 ```bash
 claude mcp add -s user crit -- node ~/.crit/mcp/mcp-server.js
 ```
@@ -184,12 +198,13 @@ claude mcp add -s user crit -- node ~/.crit/mcp/mcp-server.js
 
 If the provider is **Claude Code** and no `crit` server is registered, the first send in a window offers to install it — with **Don't Show Again** if you would rather wire it up yourself. The check is `claude mcp get crit`, run once per window in the workspace folder, so the CLI decides what counts as registered: config location, scopes, and directory all follow its own rules. Matching is by name, so repointing the `crit` entry at a different build is a supported thing to do — Crit sees it as installed and leaves it alone.
 
-`claude` is looked up on the extension host's `PATH`. VS Code has already resolved that PATH by running your login *and* interactive shell, so **mise**, **asdf**, **nix**, and **volta** setups are picked up, including rc-file activation like `mise activate zsh`. If yours is somewhere that lookup can't reach, set `crit.claudePath`.
+`claude` is looked up on the extension host's `PATH`. VS Code has already resolved that PATH by running your login _and_ interactive shell, so **mise**, **asdf**, **nix**, and **volta** setups are picked up, including rc-file activation like `mise activate zsh`. If yours is somewhere that lookup can't reach, set `crit.claudePath`.
 
 The registered interpreter is the bare word `node`, resolved by whatever environment Claude Code itself runs in; no absolute toolchain path is recorded, so the server is never pinned to a runtime version that a later `mise prune` or nix GC can delete.
 
 **Cursor:**
 Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
+
 ```json
 {
   "mcpServers": {
@@ -203,15 +218,19 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 
 **Other MCP clients:**
 Any client that supports the stdio transport can connect. Point it at the staged copy, which keeps its path across extension updates:
+
 ```
 <home>/.crit/mcp/mcp-server.js
 ```
+
 Run with: `node mcp-server.js` (stdio transport, no arguments needed).
 
 > **Note:** The matching VS Code window must be running and activated for the MCP server to connect. The MCP server communicates with that window's local IPC server, so comments are always live.
 
 ### Clipboard Support
+
 Every action that sends to AI also has a **Copy to Clipboard** variant — paste the structured prompt into Claude Code, Codex CLI, ChatGPT, or any AI:
+
 - **Per-thread**: 📋 button on the thread title bar
 - **Per-file**: Copy action in the comment panel
 - **Global**: "Crit: Copy All to Clipboard" in the command palette
@@ -220,16 +239,16 @@ Every action that sends to AI also has a **Copy to Clipboard** variant — paste
 
 ## Commands
 
-| Command | Description |
-|---|---|
-| `Crit: Ask AI to Review Changes` | Have the AI review the uncommitted changes and leave inline comments |
-| `Crit: Ask AI to Review This File` | Have the AI review the active file and leave inline comments |
-| `Crit: Show Comments Panel` | Open the interactive comment panel |
-| `Crit: Send All to AI` | Send all open comments to the configured AI provider |
-| `Crit: Copy All to Clipboard` | Copy all open comments as a structured prompt |
-| `Crit: Resolve All` | Resolve all open comments |
-| `Crit: Delete All Resolved` | Delete all resolved comments |
-| `Crit: Clear All Comments` | Delete all comments |
+| Command                            | Description                                                          |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| `Crit: Ask AI to Review Changes`   | Have the AI review the uncommitted changes and leave inline comments |
+| `Crit: Ask AI to Review This File` | Have the AI review the active file and leave inline comments         |
+| `Crit: Show Comments Panel`        | Open the interactive comment panel                                   |
+| `Crit: Send All to AI`             | Send all open comments to the configured AI provider                 |
+| `Crit: Copy All to Clipboard`      | Copy all open comments as a structured prompt                        |
+| `Crit: Resolve All`                | Resolve all open comments                                            |
+| `Crit: Delete All Resolved`        | Delete all resolved comments                                         |
+| `Crit: Clear All Comments`         | Delete all comments                                                  |
 
 ---
 
@@ -290,14 +309,14 @@ Copy-Item "out\extension.js" "$HOME\.vscode\extensions\svyatogor.crit-0.1.0\out\
 
 ## Version History
 
-| Version | Highlights |
-|---|---|
-| **0.4.1** | Request a review from the Source Control view — the whole diff from its title bar, or one changed file inline |
+| Version   | Highlights                                                                                                                                                    |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **0.4.1** | Request a review from the Source Control view — the whole diff from its title bar, or one changed file inline                                                 |
 | **0.4.0** | AI-authored reviews — `Crit: Ask AI to Review Changes`, the `addDiffComment` MCP tool, and the project code that addresses a window before any comment exists |
-| **0.1.3** | Git diff context in prompts — AI sees what changed, not just current code |
-| **0.1.2** | Branch-scoped comment persistence — comments follow repo + branch, inherit on new branches |
-| **0.1.1** | Clipboard support, bug fixes (activation crash, comment rendering, CRLF line tracking) |
-| **0.1.0** | Initial release — inline comments, threaded replies, batch submit, comment panel, Copilot tools, MCP server, IPC, persistence, line tracking |
+| **0.1.3** | Git diff context in prompts — AI sees what changed, not just current code                                                                                     |
+| **0.1.2** | Branch-scoped comment persistence — comments follow repo + branch, inherit on new branches                                                                    |
+| **0.1.1** | Clipboard support, bug fixes (activation crash, comment rendering, CRLF line tracking)                                                                        |
+| **0.1.0** | Initial release — inline comments, threaded replies, batch submit, comment panel, Copilot tools, MCP server, IPC, persistence, line tracking                  |
 
 ---
 

@@ -15,33 +15,33 @@
  * Require this before requiring anything from `src`.
  */
 
-const fs = require('node:fs');
-const path = require('node:path');
-const { pathToFileURL } = require('node:url');
-const { registerHooks } = require('node:module');
+const fs = require('node:fs')
+const path = require('node:path')
+const { pathToFileURL } = require('node:url')
+const { registerHooks } = require('node:module')
 
-const STUB_URL = pathToFileURL(path.join(__dirname, 'vscode-stub.mjs')).href;
+const STUB_URL = pathToFileURL(path.join(__dirname, 'vscode-stub.mjs')).href
 
 registerHooks({
-    resolve(specifier, context, nextResolve) {
-        if (specifier === 'vscode') return { url: STUB_URL, shortCircuit: true };
+  resolve(specifier, context, nextResolve) {
+    if (specifier === 'vscode') return { url: STUB_URL, shortCircuit: true }
 
-        if (specifier.startsWith('.') && !path.extname(specifier) && context.parentURL) {
-            const resolved = path.resolve(path.dirname(fileFromUrl(context.parentURL)), specifier);
-            if (fs.existsSync(`${resolved}.ts`)) {
-                return nextResolve(`${specifier}.ts`, context);
-            }
-        }
+    if (specifier.startsWith('.') && !path.extname(specifier) && context.parentURL) {
+      const resolved = path.resolve(path.dirname(fileFromUrl(context.parentURL)), specifier)
+      if (fs.existsSync(`${resolved}.ts`)) {
+        return nextResolve(`${specifier}.ts`, context)
+      }
+    }
 
-        return nextResolve(specifier, context);
-    },
-});
+    return nextResolve(specifier, context)
+  },
+})
 
 function fileFromUrl(url) {
-    return url.startsWith('file:') ? new URL(url).pathname : url;
+  return url.startsWith('file:') ? new URL(url).pathname : url
 }
 
 /** The stub `vscode` module, so a test can drive what the source sees. */
-const vscodeStub = require('./vscode-stub.mjs');
+const vscodeStub = require('./vscode-stub.mjs')
 
-module.exports = { vscodeStub };
+module.exports = { vscodeStub }

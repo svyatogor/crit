@@ -312,6 +312,11 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p ./",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "pretest": "npm run lint && npm run format:check",
     "test": "npm run typecheck && npm run build:mcp && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/*.test.cjs",
     "build": "npx esbuild src/extension.ts --bundle --outfile=out/extension.js --format=cjs --platform=node --external:vscode --loader:.md=text && npx esbuild src/mcp-server.ts --bundle --outfile=out/mcp-server.js --format=cjs --platform=node --target=node18",
     "build:ext": "npx esbuild src/extension.ts --bundle --outfile=out/extension.js --format=cjs --platform=node --external:vscode --loader:.md=text",
@@ -325,11 +330,17 @@
     "zod": "^3.24.4"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^26.2.0",
     "@types/vscode": "^1.93.0",
     "@types/which": "^3.0.4",
     "esbuild": "^0.20.0",
+    "eslint": "^10.8.1",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.11.0",
+    "prettier": "^3.9.6",
     "sharp": "^0.34.5",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "typescript-eslint": "^8.67.0"
   }
 }

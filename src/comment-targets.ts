@@ -1,5 +1,5 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'fs'
+import * as path from 'path'
 
 /**
  * Turning the file an agent names into a path this window may comment on.
@@ -20,13 +20,11 @@ import * as path from 'path';
  * Kept free of `vscode` so the rules can be tested directly.
  */
 
-export type CommentTargetResolution =
-    | { path: string }
-    | { error: string };
+export type CommentTargetResolution = { path: string } | { error: string }
 
 export interface ResolveOptions {
-    /** Overridable so tests need no real files. */
-    exists?: (candidate: string) => boolean;
+  /** Overridable so tests need no real files. */
+  exists?: (candidate: string) => boolean
 }
 
 /**
@@ -38,51 +36,52 @@ export interface ResolveOptions {
  * as. Errors are agent-facing: each says what to send instead.
  */
 export function resolveCommentFile(
-    file: string,
-    folders: string[],
-    options: ResolveOptions = {},
+  file: string,
+  folders: string[],
+  options: ResolveOptions = {},
 ): CommentTargetResolution {
-    const exists = options.exists ?? defaultExists;
+  const exists = options.exists ?? defaultExists
 
-    if (file.trim().length === 0) {
-        return { error: 'A review comment needs a non-empty file path.' };
+  if (file.trim().length === 0) {
+    return { error: 'A review comment needs a non-empty file path.' }
+  }
+  if (folders.length === 0) {
+    return {
+      error:
+        'That project has no local workspace folder in this VS Code window, ' +
+        'so there is nowhere to anchor a comment.',
     }
-    if (folders.length === 0) {
-        return {
-            error: 'That project has no local workspace folder in this VS Code window, ' +
-                'so there is nowhere to anchor a comment.',
-        };
-    }
+  }
 
-    const requested = file.trim();
-    const candidates = path.isAbsolute(requested)
-        ? [path.normalize(requested)]
-        : folders.map(folder => path.resolve(folder, requested));
+  const requested = file.trim()
+  const candidates = path.isAbsolute(requested)
+    ? [path.normalize(requested)]
+    : folders.map((folder) => path.resolve(folder, requested))
 
-    const contained = candidates.filter(
-        candidate => folders.some(folder => containsPath(folder, candidate)),
-    );
-    if (contained.length === 0) {
-        return {
-            error: `${requested} is outside the workspace folders of the project that code ` +
-                'addresses. Pass a path relative to the project root.',
-        };
+  const contained = candidates.filter((candidate) => folders.some((folder) => containsPath(folder, candidate)))
+  if (contained.length === 0) {
+    return {
+      error:
+        `${requested} is outside the workspace folders of the project that code ` +
+        'addresses. Pass a path relative to the project root.',
     }
+  }
 
-    const found = contained.find(exists);
-    if (!found) {
-        return {
-            error: `No file at ${requested} in that project. Pass a path relative to the ` +
-                'project root, exactly as it appears on disk.',
-        };
+  const found = contained.find(exists)
+  if (!found) {
+    return {
+      error:
+        `No file at ${requested} in that project. Pass a path relative to the ` +
+        'project root, exactly as it appears on disk.',
     }
-    return { path: found };
+  }
+  return { path: found }
 }
 
 /** Whether `target` is `folder` or sits underneath it. */
 export function containsPath(folder: string, target: string): boolean {
-    const relative = path.relative(path.resolve(folder), path.resolve(target));
-    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  const relative = path.relative(path.resolve(folder), path.resolve(target))
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
 /**
@@ -94,13 +93,13 @@ export function containsPath(folder: string, target: string): boolean {
  * a document VS Code opened, but is handled so the result is never negative.
  */
 export function toDocumentLine(line: number, lineCount: number): number {
-    return Math.max(0, Math.min(line - 1, lineCount - 1));
+  return Math.max(0, Math.min(line - 1, lineCount - 1))
 }
 
 function defaultExists(candidate: string): boolean {
-    try {
-        return fs.statSync(candidate).isFile();
-    } catch {
-        return false;
-    }
+  try {
+    return fs.statSync(candidate).isFile()
+  } catch {
+    return false
+  }
 }

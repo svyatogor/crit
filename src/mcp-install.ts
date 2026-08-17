@@ -1,11 +1,11 @@
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
-import { execFile } from 'child_process';
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+import { execFile } from 'child_process'
 // Default import, not `* as which`: the package is plain CommonJS, so a real
 // ESM namespace exposes only `default` and `sync` would be undefined.
-import which from 'which';
-import * as vscode from 'vscode';
+import which from 'which'
+import * as vscode from 'vscode'
 
 /**
  * One-command registration of Crit's MCP server with Claude Code, at user scope.
@@ -29,32 +29,32 @@ import * as vscode from 'vscode';
  */
 
 /** Server name under `mcpServers` in Claude Code's user config. */
-export const MCP_SERVER_NAME = 'crit';
+export const MCP_SERVER_NAME = 'crit'
 
 export function stagingDir(): string {
-    return path.join(os.homedir(), '.crit', 'mcp');
+  return path.join(os.homedir(), '.crit', 'mcp')
 }
 
 /** The stable path registered with Claude Code. Must not vary by version. */
 export function stagedServerPath(dir = stagingDir()): string {
-    return path.join(dir, 'mcp-server.js');
+  return path.join(dir, 'mcp-server.js')
 }
 
 /** Records what was staged, so activation can tell a stale copy from a current one. */
 function stampPath(dir: string): string {
-    return path.join(dir, 'installed.json');
+  return path.join(dir, 'installed.json')
 }
 
 interface Stamp {
-    version: string;
-    size: number;
-    mtimeMs: number;
+  version: string
+  size: number
+  mtimeMs: number
 }
 
 export interface StageResult {
-    serverPath: string;
-    /** False when the staged copy was already current and nothing was written. */
-    updated: boolean;
+  serverPath: string
+  /** False when the staged copy was already current and nothing was written. */
+  updated: boolean
 }
 
 /**
@@ -67,40 +67,40 @@ export interface StageResult {
  * was first installed.
  */
 export function stageServer(context: vscode.ExtensionContext, dir = stagingDir()): StageResult {
-    const source = vscode.Uri.joinPath(context.extensionUri, 'out', 'mcp-server.js').fsPath;
-    const stat = fs.statSync(source);
-    const current: Stamp = {
-        version: context.extension.packageJSON.version ?? '0.0.0',
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-    };
+  const source = vscode.Uri.joinPath(context.extensionUri, 'out', 'mcp-server.js').fsPath
+  const stat = fs.statSync(source)
+  const current: Stamp = {
+    version: context.extension.packageJSON.version ?? '0.0.0',
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+  }
 
-    const target = stagedServerPath(dir);
-    if (fs.existsSync(target) && sameStamp(readStamp(dir), current)) {
-        return { serverPath: target, updated: false };
-    }
+  const target = stagedServerPath(dir)
+  if (fs.existsSync(target) && sameStamp(readStamp(dir), current)) {
+    return { serverPath: target, updated: false }
+  }
 
-    const bundle = fs.readFileSync(source);
+  const bundle = fs.readFileSync(source)
 
-    fs.mkdirSync(dir, { recursive: true });
-    writeAtomic(target, bundle);
-    writeAtomic(stampPath(dir), Buffer.from(JSON.stringify(current, null, 2)));
-    return { serverPath: target, updated: true };
+  fs.mkdirSync(dir, { recursive: true })
+  writeAtomic(target, bundle)
+  writeAtomic(stampPath(dir), Buffer.from(JSON.stringify(current, null, 2)))
+  return { serverPath: target, updated: true }
 }
 
 function readStamp(dir: string): Stamp | undefined {
-    try {
-        const parsed = JSON.parse(fs.readFileSync(stampPath(dir), 'utf-8'));
-        if (typeof parsed?.version !== 'string') return undefined;
-        if (typeof parsed?.size !== 'number' || typeof parsed?.mtimeMs !== 'number') return undefined;
-        return parsed as Stamp;
-    } catch {
-        return undefined;
-    }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(stampPath(dir), 'utf-8'))
+    if (typeof parsed?.version !== 'string') return undefined
+    if (typeof parsed?.size !== 'number' || typeof parsed?.mtimeMs !== 'number') return undefined
+    return parsed as Stamp
+  } catch {
+    return undefined
+  }
 }
 
 function sameStamp(a: Stamp | undefined, b: Stamp): boolean {
-    return !!a && a.version === b.version && a.size === b.size && a.mtimeMs === b.mtimeMs;
+  return !!a && a.version === b.version && a.size === b.size && a.mtimeMs === b.mtimeMs
 }
 
 /**
@@ -108,11 +108,10 @@ function sameStamp(a: Stamp | undefined, b: Stamp): boolean {
  * staging the same build concurrently can never expose a half-written server.
  */
 function writeAtomic(target: string, data: Buffer) {
-    const temp = `${target}.${process.pid}.tmp`;
-    fs.writeFileSync(temp, data);
-    fs.renameSync(temp, target);
+  const temp = `${target}.${process.pid}.tmp`
+  fs.writeFileSync(temp, data)
+  fs.renameSync(temp, target)
 }
-
 
 // --------------- Finding the `claude` CLI ---------------
 
@@ -133,7 +132,7 @@ function writeAtomic(target: string, data: Buffer) {
  */
 
 /** Setting that overrides discovery, in the shape every language extension offers. */
-const CLAUDE_PATH_SETTING = 'crit.claudePath';
+const CLAUDE_PATH_SETTING = 'crit.claudePath'
 
 /**
  * Fallbacks for when `process.env.PATH` is not the user's real PATH — VS Code
@@ -141,15 +140,15 @@ const CLAUDE_PATH_SETTING = 'crit.claudePath';
  * the environment less reliably than local ones.
  */
 function fallbackBinDirs(): string[] {
-    const home = os.homedir();
-    return [
-        path.join(home, '.local', 'share', 'mise', 'shims'),
-        path.join(home, '.local', 'bin'),
-        path.join(home, '.claude', 'local'),
-        path.join(home, '.bun', 'bin'),
-        '/opt/homebrew/bin',
-        '/usr/local/bin',
-    ];
+  const home = os.homedir()
+  return [
+    path.join(home, '.local', 'share', 'mise', 'shims'),
+    path.join(home, '.local', 'bin'),
+    path.join(home, '.claude', 'local'),
+    path.join(home, '.bun', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+  ]
 }
 
 /**
@@ -160,18 +159,18 @@ function fallbackBinDirs(): string[] {
  * something either of us controls.
  */
 export function findClaude(env = process.env): string | undefined {
-    const configured = vscode.workspace.getConfiguration().get<string>(CLAUDE_PATH_SETTING);
-    if (configured) return configured;
+  const configured = vscode.workspace.getConfiguration().get<string>(CLAUDE_PATH_SETTING)
+  if (configured) return configured
 
-    const onPath = which.sync('claude', { nothrow: true, path: env.PATH });
-    if (onPath) return onPath;
+  const onPath = which.sync('claude', { nothrow: true, path: env.PATH })
+  if (onPath) return onPath
 
-    return which.sync('claude', { nothrow: true, path: fallbackBinDirs().join(path.delimiter) }) ?? undefined;
+  return which.sync('claude', { nothrow: true, path: fallbackBinDirs().join(path.delimiter) }) ?? undefined
 }
 
 interface RunResult {
-    code: number;
-    output: string;
+  code: number
+  output: string
 }
 
 /**
@@ -182,34 +181,34 @@ interface RunResult {
  * scope in this project is then visible to `mcp get`.
  */
 function runClaude(claudePath: string, args: string[]): Promise<RunResult> {
-    return new Promise(resolve => {
-        execFile(claudePath, args, { cwd: workspaceCwd(), timeout: 30_000 }, (error, stdout, stderr) => {
-            const output = `${stdout ?? ''}${stderr ?? ''}`.trim();
-            resolve({ code: error ? exitCode(error) : 0, output });
-        });
-    });
+  return new Promise((resolve) => {
+    execFile(claudePath, args, { cwd: workspaceCwd(), timeout: 30_000 }, (error, stdout, stderr) => {
+      const output = `${stdout ?? ''}${stderr ?? ''}`.trim()
+      resolve({ code: error ? exitCode(error) : 0, output })
+    })
+  })
 }
 
 /** `error.code` is the exit status for a normal failure, but a string like `ENOENT` when the spawn itself failed. */
 function exitCode(error: unknown): number {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    return typeof code === 'number' ? code : 1;
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  return typeof code === 'number' ? code : 1
 }
 
 function workspaceCwd(): string | undefined {
-    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
 }
 
 // --------------- Registration ---------------
 
 /** Single-quote for a POSIX shell; `'` is closed, escaped, and reopened. */
 export function shellQuote(value: string): string {
-    return `'${value.replace(/'/g, `'\\''`)}'`;
+  return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
 /** The `claude mcp add` invocation, shown to the user when we cannot run it. */
 export function installCommand(serverPath: string): string {
-    return `claude mcp add -s user ${MCP_SERVER_NAME} -- node ${shellQuote(serverPath)}`;
+  return `claude mcp add -s user ${MCP_SERVER_NAME} -- node ${shellQuote(serverPath)}`
 }
 
 /**
@@ -223,8 +222,8 @@ export function installCommand(serverPath: string): string {
  * warn about.
  */
 export async function isMcpRegistered(claudePath: string): Promise<boolean> {
-    const result = await runClaude(claudePath, ['mcp', 'get', MCP_SERVER_NAME]);
-    return result.code === 0;
+  const result = await runClaude(claudePath, ['mcp', 'get', MCP_SERVER_NAME])
+  return result.code === 0
 }
 
 /**
@@ -237,50 +236,50 @@ export async function isMcpRegistered(claudePath: string): Promise<boolean> {
  * failing on "already exists".
  */
 export async function installMcpServer(context: vscode.ExtensionContext, log: vscode.OutputChannel) {
-    let serverPath: string;
-    try {
-        serverPath = stageServer(context).serverPath;
-    } catch (e: any) {
-        vscode.window.showErrorMessage(`Crit: could not stage the MCP server — ${e.message}`);
-        return;
-    }
+  let serverPath: string
+  try {
+    serverPath = stageServer(context).serverPath
+  } catch (e: any) {
+    vscode.window.showErrorMessage(`Crit: could not stage the MCP server — ${e.message}`)
+    return
+  }
 
-    const claudePath = findClaude();
-    if (!claudePath) {
-        await offerManualCommand(
-            serverPath,
-            'Crit could not find the `claude` CLI. Set `crit.claudePath` if it is installed somewhere unusual.',
-        );
-        return;
-    }
+  const claudePath = findClaude()
+  if (!claudePath) {
+    await offerManualCommand(
+      serverPath,
+      'Crit could not find the `claude` CLI. Set `crit.claudePath` if it is installed somewhere unusual.',
+    )
+    return
+  }
 
-    // Failure here is not fatal — there may be nothing registered to remove.
-    await runClaude(claudePath, ['mcp', 'remove', '-s', 'user', MCP_SERVER_NAME]);
-    const added = await runClaude(claudePath, ['mcp', 'add', '-s', 'user', MCP_SERVER_NAME, '--', 'node', serverPath]);
-    log.appendLine(`[Crit] claude mcp add exited ${added.code}: ${added.output}`);
+  // Failure here is not fatal — there may be nothing registered to remove.
+  await runClaude(claudePath, ['mcp', 'remove', '-s', 'user', MCP_SERVER_NAME])
+  const added = await runClaude(claudePath, ['mcp', 'add', '-s', 'user', MCP_SERVER_NAME, '--', 'node', serverPath])
+  log.appendLine(`[Crit] claude mcp add exited ${added.code}: ${added.output}`)
 
-    if (added.code !== 0) {
-        await offerManualCommand(serverPath, `Crit could not register the MCP server: ${added.output}`);
-        return;
-    }
+  if (added.code !== 0) {
+    await offerManualCommand(serverPath, `Crit could not register the MCP server: ${added.output}`)
+    return
+  }
 
-    vscode.window.showInformationMessage(
-        `Crit MCP server registered with Claude Code as "${MCP_SERVER_NAME}" (user scope). ` +
-        'Restart any running Claude Code session to pick it up.'
-    );
+  vscode.window.showInformationMessage(
+    `Crit MCP server registered with Claude Code as "${MCP_SERVER_NAME}" (user scope). ` +
+      'Restart any running Claude Code session to pick it up.',
+  )
 }
 
 // --------------- Prompting when it was never installed ---------------
 
 /** Set once the user asks not to be told again, on this machine. */
-const DISMISSED_KEY = 'crit.mcpPromptDismissed';
+const DISMISSED_KEY = 'crit.mcpPromptDismissed'
 
 /**
  * Whether this window has already run the check. It costs a `claude` subprocess
  * and the answer cannot change without the user acting on the notification, so
  * once per window is both enough and as much as anyone wants to be told.
  */
-let checkedThisWindow = false;
+let checkedThisWindow = false
 
 /**
  * Warn, once, that Crit's MCP server is not registered with Claude Code.
@@ -291,43 +290,40 @@ let checkedThisWindow = false;
  * address Claude cannot act on without the MCP tools.
  */
 export async function promptIfMcpMissing(context: vscode.ExtensionContext, log: vscode.OutputChannel) {
-    if (checkedThisWindow) return;
-    checkedThisWindow = true;
-    if (context.globalState.get<boolean>(DISMISSED_KEY)) return;
+  if (checkedThisWindow) return
+  checkedThisWindow = true
+  if (context.globalState.get<boolean>(DISMISSED_KEY)) return
 
-    const claudePath = findClaude();
-    // Nothing to say: without the CLI we cannot tell whether it is registered,
-    // and the user is evidently driving Claude Code some other way.
-    if (!claudePath) return;
+  const claudePath = findClaude()
+  // Nothing to say: without the CLI we cannot tell whether it is registered,
+  // and the user is evidently driving Claude Code some other way.
+  if (!claudePath) return
 
-    if (await isMcpRegistered(claudePath)) {
-        log.appendLine(`[Crit] MCP server "${MCP_SERVER_NAME}" is registered with Claude Code.`);
-        return;
-    }
+  if (await isMcpRegistered(claudePath)) {
+    log.appendLine(`[Crit] MCP server "${MCP_SERVER_NAME}" is registered with Claude Code.`)
+    return
+  }
 
-    const install = 'Install';
-    const never = "Don't Show Again";
-    const choice = await vscode.window.showWarningMessage(
-        `Crit's MCP server is not registered with Claude Code. Your comments were sent, but Claude ` +
-        'cannot list, reply to, or resolve them until the server is installed.',
-        install,
-        never,
-    );
+  const install = 'Install'
+  const never = "Don't Show Again"
+  const choice = await vscode.window.showWarningMessage(
+    `Crit's MCP server is not registered with Claude Code. Your comments were sent, but Claude ` +
+      'cannot list, reply to, or resolve them until the server is installed.',
+    install,
+    never,
+  )
 
-    if (choice === install) {
-        await installMcpServer(context, log);
-    } else if (choice === never) {
-        await context.globalState.update(DISMISSED_KEY, true);
-    }
+  if (choice === install) {
+    await installMcpServer(context, log)
+  } else if (choice === never) {
+    await context.globalState.update(DISMISSED_KEY, true)
+  }
 }
 
 async function offerManualCommand(serverPath: string, reason: string) {
-    const choice = await vscode.window.showWarningMessage(
-        `${reason} Run this in a terminal instead.`,
-        'Copy Command',
-    );
-    if (choice === 'Copy Command') {
-        await vscode.env.clipboard.writeText(installCommand(serverPath));
-        vscode.window.showInformationMessage('Install command copied to clipboard.');
-    }
+  const choice = await vscode.window.showWarningMessage(`${reason} Run this in a terminal instead.`, 'Copy Command')
+  if (choice === 'Copy Command') {
+    await vscode.env.clipboard.writeText(installCommand(serverPath))
+    vscode.window.showInformationMessage('Install command copied to clipboard.')
+  }
 }

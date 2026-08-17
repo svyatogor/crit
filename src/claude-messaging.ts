@@ -1,6 +1,6 @@
-import { randomUUID } from 'crypto';
-import * as net from 'net';
-import * as os from 'os';
+import { randomUUID } from 'crypto'
+import * as net from 'net'
+import * as os from 'os'
 
 /**
  * Client for Claude Code's cross-session messaging inbox socket.
@@ -31,17 +31,17 @@ import * as os from 'os';
  * `next`, and so does this client — a review batch is never worth aborting
  * work in flight.
  */
-export type MessagePriority = 'now' | 'next' | 'later';
+export type MessagePriority = 'now' | 'next' | 'later'
 
 export interface SendMessageOptions {
-    priority?: MessagePriority;
-    /**
-     * Reply address for delivery receipts, as `uds:<percent-encoded path>`.
-     * Receipts only reach a `.sock` inside the receiver's own socket directory,
-     * so a client that does not listen there gains nothing by setting this.
-     */
-    from?: string;
-    timeoutMs?: number;
+  priority?: MessagePriority
+  /**
+   * Reply address for delivery receipts, as `uds:<percent-encoded path>`.
+   * Receipts only reach a `.sock` inside the receiver's own socket directory,
+   * so a client that does not listen there gains nothing by setting this.
+   */
+  from?: string
+  timeoutMs?: number
 }
 
 /**
@@ -49,35 +49,35 @@ export interface SendMessageOptions {
  * well short of it and fail with a clear error rather than having the socket
  * torn down mid-write.
  */
-const MAX_FRAME_BYTES = 900_000;
-const DEFAULT_TIMEOUT_MS = 5_000;
+const MAX_FRAME_BYTES = 900_000
+const DEFAULT_TIMEOUT_MS = 5_000
 
 /** Claude Code's own client waits this long on macOS before half-closing. */
-const MACOS_FLUSH_DELAY_MS = 150;
+const MACOS_FLUSH_DELAY_MS = 150
 
 /** Build the single NDJSON line that delivers `text` as a user turn. */
 export function buildUserMessageFrame(text: string, options: SendMessageOptions = {}): string {
-    if (typeof text !== 'string' || text.length === 0) {
-        throw new Error('Cross-session message text must be a non-empty string.');
-    }
+  if (typeof text !== 'string' || text.length === 0) {
+    throw new Error('Cross-session message text must be a non-empty string.')
+  }
 
-    const frame: Record<string, unknown> = {
-        type: 'user',
-        message: { role: 'user', content: text },
-        priority: options.priority ?? 'next',
-        msg_id: randomUUID(),
-        ...(options.from ? { from: options.from } : {}),
-    };
+  const frame: Record<string, unknown> = {
+    type: 'user',
+    message: { role: 'user', content: text },
+    priority: options.priority ?? 'next',
+    msg_id: randomUUID(),
+    ...(options.from ? { from: options.from } : {}),
+  }
 
-    const line = JSON.stringify(frame);
-    const bytes = Buffer.byteLength(line, 'utf-8');
-    if (bytes > MAX_FRAME_BYTES) {
-        throw new Error(
-            `Cross-session message is too large to deliver (${bytes} bytes, limit ${MAX_FRAME_BYTES}). ` +
-            'Send fewer comments at once.',
-        );
-    }
-    return line;
+  const line = JSON.stringify(frame)
+  const bytes = Buffer.byteLength(line, 'utf-8')
+  if (bytes > MAX_FRAME_BYTES) {
+    throw new Error(
+      `Cross-session message is too large to deliver (${bytes} bytes, limit ${MAX_FRAME_BYTES}). ` +
+        'Send fewer comments at once.',
+    )
+  }
+  return line
 }
 
 /**
@@ -89,48 +89,49 @@ export function buildUserMessageFrame(text: string, options: SendMessageOptions 
  * message for approval) is silent on this connection and surfaces only in the
  * receiving session. Treat success as "handed over", never as "delivered".
  */
-export function sendMessageToSocket(
-    socketPath: string,
-    text: string,
-    options: SendMessageOptions = {},
-): Promise<void> {
-    const line = buildUserMessageFrame(text, options) + '\n';
-    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+export function sendMessageToSocket(socketPath: string, text: string, options: SendMessageOptions = {}): Promise<void> {
+  const line = buildUserMessageFrame(text, options) + '\n'
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
-    return new Promise<void>((resolve, reject) => {
-        const socket = net.createConnection({ path: socketPath });
-        let flushTimer: NodeJS.Timeout | undefined;
-        let settled = false;
+  return new Promise<void>((resolve, reject) => {
+    const socket = net.createConnection({ path: socketPath })
+    let flushTimer: NodeJS.Timeout | undefined
+    let settled = false
 
-        const settle = (error?: Error) => {
-            if (settled) return;
-            settled = true;
-            if (flushTimer) clearTimeout(flushTimer);
-            socket.destroy();
-            if (error) reject(error); else resolve();
-        };
+    const settle = (error?: Error) => {
+      if (settled) return
+      settled = true
+      if (flushTimer) clearTimeout(flushTimer)
+      socket.destroy()
+      if (error) reject(error)
+      else resolve()
+    }
 
-        socket.on('connect', () => {
-            socket.write(line);
-            // Closing immediately after the write can lose it on macOS
-            if (os.platform() === 'darwin') {
-                flushTimer = setTimeout(() => {
-                    if (!socket.destroyed) socket.end();
-                }, MACOS_FLUSH_DELAY_MS);
-            } else {
-                socket.end();
-            }
-        });
+    socket.on('connect', () => {
+      socket.write(line)
+      // Closing immediately after the write can lose it on macOS
+      if (os.platform() === 'darwin') {
+        flushTimer = setTimeout(() => {
+          if (!socket.destroyed) socket.end()
+        }, MACOS_FLUSH_DELAY_MS)
+      } else {
+        socket.end()
+      }
+    })
 
-        socket.on('close', () => settle());
+    socket.on('close', () => settle())
 
-        socket.on('error', (error: Error) => settle(new Error(
-            `Could not deliver a Crit message to ${socketPath}: ${error.message}. ` +
+    socket.on('error', (error: Error) =>
+      settle(
+        new Error(
+          `Could not deliver a Crit message to ${socketPath}: ${error.message}. ` +
             'The Claude Code session may have exited.',
-        )));
+        ),
+      ),
+    )
 
-        socket.setTimeout(timeoutMs, () => settle(new Error(
-            `Timed out after ${timeoutMs}ms delivering a Crit message to ${socketPath}.`,
-        )));
-    });
+    socket.setTimeout(timeoutMs, () =>
+      settle(new Error(`Timed out after ${timeoutMs}ms delivering a Crit message to ${socketPath}.`)),
+    )
+  })
 }
