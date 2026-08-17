@@ -82,10 +82,11 @@ The reverse of every other Crit flow: instead of you commenting and the AI answe
 - **`Crit: Ask AI to Review Changes`** — the uncommitted changes in the workspace
 - **`Crit: Ask AI to Review This File`** — the file in the active editor
 - Both also appear at the top of the comment panel, which now opens even with no comments in it
+- In a git workspace, a **sparkle** button sits in the Source Control view's title bar for the whole diff, and on hover over any changed file for that one file
 
 The agent runs its own `code-review` skill and posts each finding through `addDiffComment`, so the findings arrive as ordinary Crit threads: they show up in the gutter and the Problems view, you can reply to them, resolve them, or send them straight back with **Send to AI** to have the finding fixed. Nothing is edited on your behalf — a review request explicitly asks for comments, not changes.
 
-Requesting a review needs the **Claude Code** provider (`crit.aiProvider`). Copilot's review runs inside its own UI and would need a separate integration to land findings as Crit comments, so a Copilot user is told that rather than handed a prompt that goes nowhere. The request is delivered the same three ways a comment batch is — running terminal, then cross-session message, then a new conversation — and all three send the literal `/code-review` slash command, which expands on every one of them. Only the wrapping differs: `Terminal.sendText` submits on every newline, so the terminal receives the request flattened to a single line.
+Requesting a review needs the **Claude Code** provider (`crit.aiProvider`). Copilot's review runs inside its own UI and would need a separate integration to land findings as Crit comments, so a Copilot user is told that rather than handed a prompt that goes nowhere. The request is delivered the same three ways a comment batch is — running terminal, then cross-session message, then a new conversation — and all three send the literal `/code-review` slash command, which expands on every one of them. All three receive the same text: the CLI reads a multi-line `Terminal.sendText` as a paste, so the request keeps its line breaks on every path.
 
 ### Review Comments as Diagnostics
 Every open review thread is also published as a VS Code **Information** diagnostic with the source `Crit`. This makes review feedback available to AI extensions that already read diagnostics from the current VS Code window and naturally keeps the feedback attached to the correct file and range.

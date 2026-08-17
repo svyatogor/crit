@@ -644,7 +644,7 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('crit.requestReviewFile', (arg?: vscode.Uri) => {
+        vscode.commands.registerCommand('crit.requestReviewFile', (arg?: vscode.Uri | vscode.SourceControlResourceState) => {
             const target = fileReviewTarget(arg);
             if (!target) {
                 vscode.window.showInformationMessage('Open a file to have the AI review it.');
@@ -666,11 +666,20 @@ export function activate(context: vscode.ExtensionContext) {
 /**
  * The file a review request names: the URI a menu passed us, else whatever is
  * in the active editor — the command palette passes nothing.
+ *
+ * The Source Control view hands over a resource state rather than a URI, so
+ * both shapes are accepted.
  */
-function fileReviewTarget(arg?: vscode.Uri): ReviewTarget | undefined {
-    const uri = arg instanceof vscode.Uri ? arg : vscode.window.activeTextEditor?.document.uri;
+function fileReviewTarget(arg?: vscode.Uri | vscode.SourceControlResourceState): ReviewTarget | undefined {
+    const uri = menuUri(arg) ?? vscode.window.activeTextEditor?.document.uri;
     if (!uri || uri.scheme !== 'file') return undefined;
     return { kind: 'file', uri };
+}
+
+function menuUri(arg?: vscode.Uri | vscode.SourceControlResourceState): vscode.Uri | undefined {
+    if (arg instanceof vscode.Uri) return arg;
+    const resourceUri = (arg as vscode.SourceControlResourceState | undefined)?.resourceUri;
+    return resourceUri instanceof vscode.Uri ? resourceUri : undefined;
 }
 
 /** Open threads in `fileKey`, or undefined when the file has no threads. */

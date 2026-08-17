@@ -8,7 +8,7 @@ import {
     threadLabel,
     TrackedCommentThread,
 } from './review-threads';
-import { render, singleLine } from './templates';
+import { render } from './templates';
 import nudgeDiagnosticsTemplate from './prompts/nudge-diagnostics.md';
 import nudgeMcpTemplate from './prompts/nudge-mcp.md';
 import reviewIntro from './prompts/review-intro.md';
@@ -32,13 +32,13 @@ import reviewRequest from './prompts/review-request.md';
  * A short message pointing an agent at the review comments instead of inlining
  * them.
  *
- * Inlining the full prompt fails on both live-delivery paths, for different
- * reasons. A cross-session message is never rendered by the Claude Code panel —
- * its webview has no renderer for peer messages and the text is not persisted
- * as a transcript entry — so the user cannot see what was sent. And
- * `Terminal.sendText` submits on every newline, so markdown would arrive as
- * dozens of fragments. A nudge sidesteps both: the agent fetches the comments
- * itself, and that fetch is a tool call the user can see.
+ * Inlining the full prompt fails on both live-delivery paths. A cross-session
+ * message is never rendered by the Claude Code panel — its webview has no
+ * renderer for peer messages and the text is not persisted as a transcript
+ * entry — so the user cannot see what was sent. On the terminal the CLI folds a
+ * multi-line send into a collapsed paste, so a long prompt is just as invisible.
+ * A nudge sidesteps both: the agent fetches the comments itself, and that fetch
+ * is a tool call the user can see.
  *
  * `source` selects how the agent discovers the comments:
  *  - `diagnostics` — VS Code's own diagnostics, which the Claude Code CLI can
@@ -61,11 +61,11 @@ export function buildNudgeMessage(
     const code = diagnosticCode(threads[0]);
 
     if (source === 'diagnostics') {
-        return singleLine(render(nudgeDiagnosticsTemplate, {
+        return render(nudgeDiagnosticsTemplate, {
             subject,
             label: threadLabel(threads[0]),
             code,
-        }));
+        });
     }
 
     return render(nudgeMcpTemplate, { subject, code });
@@ -86,15 +86,14 @@ export interface ReviewScope {
  * The review request, in the shape each delivery path needs.
  *
  * All three send the `/code-review` slash command — it expands on the terminal,
- * in a cross-session message, and in a new conversation alike. Only the wrapping
- * differs: `Terminal.sendText` submits on every newline, so the terminal gets the
- * template flattened, while the other two keep its line breaks and stay readable
- * as text.
+ * in a cross-session message, and in a new conversation alike — and all three
+ * take the same text: the CLI reads a multi-line send as a paste, so the
+ * template's line breaks survive the terminal too.
  */
 export function buildReviewRequest(scope: ReviewScope): ClaudeDelivery {
     const request = render(reviewRequest, { args: scope.args, code: scope.code });
     return {
-        terminal: singleLine(request),
+        terminal: request,
         message: request,
         editor: request,
     };

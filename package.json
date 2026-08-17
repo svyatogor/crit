@@ -157,6 +157,20 @@
       }
     ],
     "menus": {
+      "scm/title": [
+        {
+          "command": "crit.requestReview",
+          "group": "navigation",
+          "when": "scmProvider == git"
+        }
+      ],
+      "scm/resourceState/context": [
+        {
+          "command": "crit.requestReviewFile",
+          "group": "inline",
+          "when": "scmProvider == git"
+        }
+      ],
       "comments/commentThread/context": [
         {
           "command": "crit.createNote",

@@ -8,8 +8,9 @@ import { ClaudeSession, findSessionForWorkspace } from './claude-sessions';
  * There are three ways in and they take different text, which is why callers
  * hand over all three up front rather than one string:
  *
- *  - **terminal** — `Terminal.sendText` submits on every newline, so this one
- *    must be a single line.
+ *  - **terminal** — `Terminal.sendText` into the running CLI, which reads the
+ *    whole send as a paste; line breaks are fine, but a long one arrives
+ *    collapsed, so the user sees only how many lines it was.
  *  - **message** — the cross-session inbox delivers a user turn; markdown is
  *    fine, but the panel never renders it, so the text has to make sense as
  *    something the user did not see.
