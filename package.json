@@ -2,7 +2,7 @@
   "name": "crit",
   "displayName": "Crit",
   "description": "Crit \u2014 pair review with your AI. Inline code review comments \u2014 review AI-generated changes, submit feedback in batch to Copilot, Claude Code, or any AI agent, with git diff context",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "Sergey Kuleshov",
   "icon": "icon.png",
   "repository": {
@@ -139,6 +139,16 @@
         "command": "crit.copyAll",
         "title": "Crit: Copy All to Clipboard",
         "icon": "$(clippy)"
+      },
+      {
+        "command": "crit.requestReview",
+        "title": "Crit: Ask Claude to Review Changes",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "crit.requestReviewFile",
+        "title": "Crit: Ask Claude to Review This File",
+        "icon": "$(sparkle)"
       },
       {
         "command": "crit.installMcpServer",

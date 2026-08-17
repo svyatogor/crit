@@ -28,8 +28,39 @@ test('diagnostic metadata round trips through the versioned code', () => {
     assert.deepEqual(parseDiagnosticMetadata(code), metadata);
 });
 
+test('a project code addresses a window and project with no thread', () => {
+    // What a review request hands out: the agent is being asked to create the
+    // threads, so there is no thread to name yet.
+    const metadata = {
+        version: 1,
+        sessionRef: createSessionRef(),
+        projectRef: createProjectRef('file:///workspace/project'),
+    };
+
+    const code = encodeDiagnosticMetadata(metadata);
+
+    assert.match(code, /^crit:v1;[0-9a-f]{8};[0-9a-f]{8}$/);
+    assert.deepEqual(parseDiagnosticMetadata(code), metadata);
+    // Absent, not undefined — so a round trip compares equal and callers can
+    // test for a thread with a plain `=== undefined`.
+    assert.equal('threadRef' in parseDiagnosticMetadata(code), false);
+});
+
 test('parser rejects malformed and unsupported diagnostic codes', () => {
     assert.equal(parseDiagnosticMetadata('not-crit'), undefined);
+    // A project code is two refs and a thread code is three; anything else is
+    // a code from some other version of this format, not one to guess at.
+    assert.equal(parseDiagnosticMetadata(`crit:v1;${createSessionRef()}`), undefined);
+    assert.equal(
+        parseDiagnosticMetadata(`crit:v1;${createSessionRef()};${createProjectRef('p')};`),
+        undefined,
+    );
+    assert.equal(
+        parseDiagnosticMetadata(
+            `crit:v1;${createSessionRef()};${createProjectRef('p')};${createThreadRef()};${createThreadRef()}`,
+        ),
+        undefined,
+    );
     assert.equal(
         parseDiagnosticMetadata(
             `crit:v2;${createSessionRef()};${createProjectRef('project')};${createThreadRef()}`,

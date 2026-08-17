@@ -103,6 +103,49 @@ export function threadsChanged(): void {
     onThreadsChanged();
 }
 
+// --------------- Thread Creation ---------------
+
+/**
+ * The controller new threads are created on, installed once during activation.
+ *
+ * Threads created by the user come in through a `CommentReply` that already
+ * carries its thread, but a thread an agent asks for has no such handle — the
+ * request arrives over IPC, in a module with no reason to know about the
+ * extension host. Registering the controller here is the same arrangement
+ * `setThreadsChangedHandler` uses, for the same reason.
+ */
+let commentController: vscode.CommentController | undefined;
+
+export function setCommentController(controller: vscode.CommentController): void {
+    commentController = controller;
+}
+
+export interface NewThreadRequest {
+    uri: vscode.Uri;
+    /** 0-based, as VS Code counts lines. */
+    startLine: number;
+    /** 0-based; defaults to `startLine`. */
+    endLine?: number;
+    text: string;
+    /** Defaults to `agent` — a thread created through a tool is the agent's. */
+    role?: Role;
+}
+
+/** Create and track a thread, as `crit.createNote` does for the user. */
+export function createReviewThread(request: NewThreadRequest): TrackedCommentThread {
+    if (!commentController) {
+        throw new Error('Crit is still starting up and cannot create review comments yet.');
+    }
+
+    const endLine = Math.max(request.startLine, request.endLine ?? request.startLine);
+    const range = new vscode.Range(request.startLine, 0, endLine, 0);
+    const thread = commentController.createCommentThread(request.uri, range, []);
+    thread.comments = [new ReviewComment(request.text, request.role ?? 'agent')];
+    thread.canReply = true;
+    unresolveThread(thread);
+    return trackThread(thread);
+}
+
 // --------------- Thread Tracking ---------------
 
 /**
@@ -279,6 +322,32 @@ export function diagnosticCode(thread: TrackedCommentThread): string {
         projectRef: projectRefFor(thread.uri),
         threadRef: thread.threadRef,
     });
+}
+
+/**
+ * The code addressing this window and the project owning `uri`, with no thread.
+ *
+ * What a review request is handed: the agent is being asked to create the
+ * threads, so there is no thread to name yet.
+ */
+export function projectCode(uri: vscode.Uri): string {
+    return encodeDiagnosticMetadata({
+        version: CRIT_DIAGNOSTIC_VERSION,
+        sessionRef,
+        projectRef: projectRefFor(uri),
+    });
+}
+
+/**
+ * Local workspace folders belonging to `projectRef`.
+ *
+ * The search space for a file path an agent sends. Non-`file` folders are
+ * excluded because a comment has to be anchored at a real path on this machine.
+ */
+export function projectFolderPaths(projectRef: string): string[] {
+    return (vscode.workspace.workspaceFolders ?? [])
+        .filter(folder => folder.uri.scheme === 'file' && projectRefFor(folder.uri) === projectRef)
+        .map(folder => folder.uri.fsPath);
 }
 
 // --------------- Serialization ---------------

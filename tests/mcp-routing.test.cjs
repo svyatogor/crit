@@ -37,6 +37,24 @@ function startFakeInstance(name, threadRef) {
         }],
     };
 
+    // `/comment` answers with the created thread's own code, the way the
+    // extension does, so the tool has something to report back.
+    const createdThreadRef = createThreadRef();
+
+    function responseFor(method, url) {
+        if (method === 'GET') return state;
+        if (url === '/comment') {
+            return {
+                ok: true,
+                threadRef: createdThreadRef,
+                code: `crit:v1;deadbeef;deadbeef;${createdThreadRef}`,
+                file: `${name}.ts`,
+                startLine: 12,
+            };
+        }
+        return { ok: true };
+    }
+
     const server = http.createServer((req, res) => {
         const chunks = [];
         req.on('data', chunk => chunks.push(chunk));
@@ -46,7 +64,7 @@ function startFakeInstance(name, threadRef) {
             requests.push({ method: req.method, url: req.url, body });
             res.setHeader('Content-Type', 'application/json');
             res.writeHead(200);
-            res.end(JSON.stringify(req.method === 'GET' ? state : { ok: true }));
+            res.end(JSON.stringify(responseFor(req.method, req.url)));
         });
     });
 
@@ -58,7 +76,7 @@ function startFakeInstance(name, threadRef) {
                 reject(new Error('Fake IPC server did not expose a TCP port.'));
                 return;
             }
-            resolve({ server, port: address.port, requests });
+            resolve({ server, port: address.port, requests, createdThreadRef });
         });
     });
 }
@@ -83,6 +101,22 @@ function deadPid() {
 
 function toolText(result) {
     return result.content.map(part => part.type === 'text' ? part.text : '').join('\n');
+}
+
+/** A client speaking to a real `out/mcp-server.js`, closed when the test ends. */
+async function connectClient(t) {
+    const transport = new StdioClientTransport({
+        command: process.execPath,
+        args: [path.join(__dirname, '..', 'out', 'mcp-server.js')],
+        env: Object.fromEntries(
+            Object.entries(process.env).filter(([, value]) => typeof value === 'string')
+        ),
+        stderr: 'pipe',
+    });
+    const client = new Client({ name: 'crit-routing-test', version: '1.0.0' });
+    t.after(async () => { await client.close().catch(() => {}); });
+    await client.connect(transport);
+    return client;
 }
 
 test('diagnostic codes route MCP calls to the matching VS Code instance', async t => {
@@ -110,18 +144,7 @@ test('diagnostic codes route MCP calls to the matching VS Code instance', async 
         threadRef: threadB,
     });
 
-    const transport = new StdioClientTransport({
-        command: process.execPath,
-        args: [path.join(__dirname, '..', 'out', 'mcp-server.js')],
-        env: Object.fromEntries(
-            Object.entries(process.env).filter(([, value]) => typeof value === 'string')
-        ),
-        stderr: 'pipe',
-    });
-    const client = new Client({ name: 'crit-routing-test', version: '1.0.0' });
-
     t.after(async () => {
-        await client.close().catch(() => {});
         await Promise.all([
             new Promise(resolve => instanceA.server.close(resolve)),
             new Promise(resolve => instanceB.server.close(resolve)),
@@ -131,7 +154,7 @@ test('diagnostic codes route MCP calls to the matching VS Code instance', async 
         }
     });
 
-    await client.connect(transport);
+    const client = await connectClient(t);
 
     const listA = await client.callTool({ name: 'listDiffComments', arguments: { code: codeA } });
     const listB = await client.callTool({ name: 'listDiffComments', arguments: { code: codeB } });
@@ -194,5 +217,85 @@ test('diagnostic codes route MCP calls to the matching VS Code instance', async 
         [instanceA.requests.length, instanceB.requests.length],
         requestCounts,
         'a descriptor whose process has exited must not be routed to'
+    );
+});
+
+test('a project code routes a new comment to the window that asked for the review', async t => {
+    const sessionRef = createSessionRef();
+    const projectRef = createProjectRef('file:///workspace');
+    const bystanderSession = createSessionRef();
+    const instance = await startFakeInstance('gamma', createThreadRef());
+    const bystander = await startFakeInstance('delta', createThreadRef());
+    const descriptors = [
+        writeDescriptor(sessionRef, instance.port),
+        writeDescriptor(bystanderSession, bystander.port),
+    ];
+
+    t.after(async () => {
+        await Promise.all([
+            new Promise(resolve => instance.server.close(resolve)),
+            new Promise(resolve => bystander.server.close(resolve)),
+        ]);
+        for (const descriptorPath of descriptors) {
+            try { fs.unlinkSync(descriptorPath); } catch {}
+        }
+    });
+
+    // The code a review request hands out: no thread part, because the agent is
+    // being asked to create the threads.
+    const projectCode = encodeDiagnosticMetadata({ version: 1, sessionRef, projectRef });
+    assert.match(projectCode, /^crit:v1;[0-9a-f]{8};[0-9a-f]{8}$/);
+
+    const client = await connectClient(t);
+
+    const added = await client.callTool({
+        name: 'addDiffComment',
+        arguments: {
+            code: projectCode,
+            file: 'src/git.ts',
+            line: 12,
+            text: 'This swallows the error — log it or let it propagate.',
+        },
+    });
+
+    assert.match(toolText(added), /Added a review comment at gamma\.ts:12/);
+    // The new thread's own code comes back, so a follow-up reply or resolve
+    // needs no second listing.
+    assert.match(toolText(added), new RegExp(instance.createdThreadRef));
+    assert.deepEqual(instance.requests, [{
+        method: 'POST',
+        url: '/comment',
+        body: {
+            projectRef,
+            file: 'src/git.ts',
+            // 1-based on the wire; the extension converts at the boundary.
+            startLine: 12,
+            text: 'This swallows the error — log it or let it propagate.',
+        },
+    }]);
+    assert.deepEqual(bystander.requests, [], 'a project code must reach only its own window');
+
+    // Listing takes either code shape, since it only ever needed the project.
+    const listed = await client.callTool({
+        name: 'listDiffComments',
+        arguments: { code: projectCode },
+    });
+    assert.match(toolText(listed), /gamma\.ts/);
+    assert.match(instance.requests[1].url, new RegExp(`projectRef=${projectRef}`));
+
+    // But a tool that mutates one thread must not guess which one.
+    const requestCount = instance.requests.length;
+    for (const name of ['replyToDiffComment', 'resolveDiffComment', 'deleteDiffComment']) {
+        const result = await client.callTool({
+            name,
+            arguments: { code: projectCode, text: 'ignored' },
+        });
+        assert.match(toolText(result), /needs that thread's own code/, name);
+        assert.match(toolText(result), /listDiffComments/, `${name} must say how to recover`);
+    }
+    assert.equal(
+        instance.requests.length,
+        requestCount,
+        'a code with no thread must not reach the extension at all'
     );
 });

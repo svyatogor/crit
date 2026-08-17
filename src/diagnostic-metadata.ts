@@ -4,11 +4,21 @@ export const CRIT_DIAGNOSTIC_SOURCE = 'Crit';
 
 export const CRIT_DIAGNOSTIC_VERSION = 1 as const;
 
+/**
+ * Where a Crit code points.
+ *
+ * `threadRef` is absent in the shorter form, `crit:v1;<session>;<project>`,
+ * which addresses a window and a project but no comment in particular. That form
+ * exists because a review request has to be addressable before any comment
+ * exists: the agent is asked to *create* the threads, so it cannot be handed a
+ * thread's code. Tools that mutate one thread require the long form; listing and
+ * creating accept either.
+ */
 export interface CritDiagnosticMetadata {
     version: typeof CRIT_DIAGNOSTIC_VERSION;
     sessionRef: string;
     projectRef: string;
-    threadRef: string;
+    threadRef?: string;
 }
 
 /**
@@ -27,9 +37,10 @@ const REF_HEX_LENGTH = 8;
 
 // Diagnostics render as `R3 crit:v1;…`, and agents copy the whole
 // string. Accept an optional leading `R<n>` label so a pasted diagnostic code
-// resolves without the caller having to strip it first.
+// resolves without the caller having to strip it first. The thread segment is
+// optional — see `CritDiagnosticMetadata`.
 const DIAGNOSTIC_CODE_PATTERN =
-    /^(?:R\d+\s+)?crit:v(\d+);([0-9a-f]{8});([0-9a-f]{8});([0-9a-f]{8})$/;
+    /^(?:R\d+\s+)?crit:v(\d+);([0-9a-f]{8});([0-9a-f]{8})(?:;([0-9a-f]{8}))?$/;
 
 export function createSessionRef(): string {
     return createRandomRef();
@@ -55,7 +66,8 @@ export function encodeDiagnosticMetadata(metadata: CritDiagnosticMetadata): stri
     validateMetadata(metadata);
     // Positional, not labelled: `session=`/`project=`/`thread=` cost 24 chars
     // and add nothing, since order already fixes the meaning.
-    return `crit:v${metadata.version};${metadata.sessionRef};${metadata.projectRef};${metadata.threadRef}`;
+    const code = `crit:v${metadata.version};${metadata.sessionRef};${metadata.projectRef}`;
+    return metadata.threadRef === undefined ? code : `${code};${metadata.threadRef}`;
 }
 
 export function parseDiagnosticMetadata(code: string): CritDiagnosticMetadata | undefined {
@@ -69,7 +81,9 @@ export function parseDiagnosticMetadata(code: string): CritDiagnosticMetadata | 
         version,
         sessionRef: match[2],
         projectRef: match[3],
-        threadRef: match[4],
+        // Left off the object entirely rather than set to undefined, so a
+        // round-tripped project code compares equal to the metadata it came from.
+        ...(match[4] === undefined ? {} : { threadRef: match[4] }),
     };
 
     try {
@@ -94,7 +108,7 @@ function validateMetadata(metadata: CritDiagnosticMetadata): void {
     if (!isRef(metadata.projectRef)) {
         throw new Error('Invalid Crit project reference.');
     }
-    if (!isRef(metadata.threadRef)) {
+    if (metadata.threadRef !== undefined && !isRef(metadata.threadRef)) {
         throw new Error('Invalid Crit thread reference.');
     }
 }

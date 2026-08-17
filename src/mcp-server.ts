@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
  * MCP Server for Crit.
- * Connects to the VS Code extension's IPC HTTP server to list, reply, resolve,
- * and delete inline review comments.
+ * Connects to the VS Code extension's IPC HTTP server to list, add, reply to,
+ * resolve, and delete inline review comments.
  *
  * Usage: node mcp-server.js
- * The target extension instance is selected by a Crit diagnostic code.
+ * The target extension instance is selected by a Crit code.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -36,13 +36,33 @@ function resolveIpcRoute(code: string): IpcRoute {
     const metadata = parseDiagnosticMetadata(code);
     if (!metadata) {
         throw new Error(
-            'Malformed Crit diagnostic code. Expected the full code ' +
-            '`crit:v1;<session>;<project>;<thread>`, each an 8-character hex ref. ' +
-            'Copy a current code from a Crit diagnostic and try again.'
+            'Malformed Crit code. Expected `crit:v1;<session>;<project>;<thread>` or, for a ' +
+            'whole project, `crit:v1;<session>;<project>` — each ref an 8-character hex ref. ' +
+            'Copy a current code from a Crit diagnostic or review request and try again.'
         );
     }
 
     return { metadata, port: resolveLiveInstance(metadata.sessionRef).port };
+}
+
+/**
+ * The thread a code names, for the tools that mutate exactly one.
+ *
+ * A project code is a legitimate thing to be holding — it is what a review
+ * request hands out — so the failure has to say how to get from one to the other
+ * rather than just calling the code malformed.
+ */
+function requireThreadRef(route: IpcRoute): string {
+    const { threadRef } = route.metadata;
+    if (threadRef === undefined) {
+        throw new Error(
+            'This tool acts on one comment thread, so it needs that thread\'s own code ' +
+            '(`crit:v1;<session>;<project>;<thread>`). The code you passed names only a window ' +
+            'and a project. Call listDiffComments with it to read the threads — the listing ' +
+            'prints each one\'s code.'
+        );
+    }
+    return threadRef;
 }
 
 function ipcGet(route: IpcRoute, endpoint: string): Promise<any> {
@@ -153,9 +173,9 @@ const registerTool: any = server.tool.bind(server);
 // Tool 1: List comments
 registerTool(
     'listDiffComments',
-    'List inline review comments for the project identified by a Crit diagnostic code',
+    'List inline review comments for the project identified by a Crit code',
     {
-        code: z.string().describe('Full Crit diagnostic code used to select the VS Code instance and project'),
+        code: z.string().describe('Any Crit code for the project — a thread code from a diagnostic, or the project code from a review request'),
     },
     async ({ code }: { code: string }) => {
         try {
@@ -208,7 +228,51 @@ registerTool(
     }
 );
 
-// Tool 2: Reply to comment
+// Tool 2: Add a comment
+registerTool(
+    'addDiffComment',
+    'Leave a new inline review comment on a line of code, as the reviewing agent. ' +
+    'Use this to report a review finding where the reader can act on it, instead of ' +
+    'printing it in chat.',
+    {
+        code: z.string().describe('Crit code selecting the VS Code window and project — the project code from a review request, or any thread code from the same project'),
+        file: z.string().describe('The file to comment on, relative to the project root (an absolute path inside the project also works)'),
+        line: z.number().int().min(1).describe('Line the comment is anchored to, counting from 1'),
+        endLine: z.number().int().min(1).optional().describe('Last line, counting from 1, when the finding spans a range'),
+        text: z.string().describe('The comment: what is wrong and what to change. One finding per comment.'),
+    },
+    async (
+        { code, file, line, endLine, text }:
+        { code: string; file: string; line: number; endLine?: number; text: string },
+    ) => {
+        try {
+            const route = resolveIpcRoute(code);
+            const created = await ipcPost(route, '/comment', {
+                projectRef: route.metadata.projectRef,
+                file,
+                startLine: line,
+                endLine,
+                text,
+            });
+            if (!created || typeof created.code !== 'string') {
+                throw new Error('Crit IPC protocol error: the created comment has no code.');
+            }
+            return {
+                content: [{
+                    type: 'text' as const,
+                    // The new thread's own code, so a follow-up reply or resolve
+                    // has an address without another listing.
+                    text: `Added a review comment at ${created.file}:${created.startLine}. ` +
+                        `Its code is ${created.code}.`,
+                }],
+            };
+        } catch (error: unknown) {
+            return { content: [{ type: 'text' as const, text: `Error: ${errorMessage(error)}` }] };
+        }
+    }
+);
+
+// Tool 3: Reply to comment
 registerTool(
     'replyToDiffComment',
     'Reply to an existing inline review comment thread as the agent role',
@@ -219,15 +283,16 @@ registerTool(
     async ({ code, text }: { code: string; text: string }) => {
         try {
             const route = resolveIpcRoute(code);
-            await ipcPost(route, '/reply', { threadRef: route.metadata.threadRef, text });
-            return { content: [{ type: 'text' as const, text: `Replied to thread ${route.metadata.threadRef}.` }] };
+            const threadRef = requireThreadRef(route);
+            await ipcPost(route, '/reply', { threadRef, text });
+            return { content: [{ type: 'text' as const, text: `Replied to thread ${threadRef}.` }] };
         } catch (error: unknown) {
             return { content: [{ type: 'text' as const, text: `Error: ${errorMessage(error)}` }] };
         }
     }
 );
 
-// Tool 3: Resolve comment
+// Tool 4: Resolve comment
 registerTool(
     'resolveDiffComment',
     'Mark an inline review comment as resolved/done',
@@ -237,15 +302,16 @@ registerTool(
     async ({ code }: { code: string }) => {
         try {
             const route = resolveIpcRoute(code);
-            await ipcPost(route, '/resolve', { threadRef: route.metadata.threadRef });
-            return { content: [{ type: 'text' as const, text: `Thread ${route.metadata.threadRef} resolved.` }] };
+            const threadRef = requireThreadRef(route);
+            await ipcPost(route, '/resolve', { threadRef });
+            return { content: [{ type: 'text' as const, text: `Thread ${threadRef} resolved.` }] };
         } catch (error: unknown) {
             return { content: [{ type: 'text' as const, text: `Error: ${errorMessage(error)}` }] };
         }
     }
 );
 
-// Tool 4: Delete comment
+// Tool 5: Delete comment
 registerTool(
     'deleteDiffComment',
     'Delete an inline review comment thread entirely',
@@ -255,8 +321,9 @@ registerTool(
     async ({ code }: { code: string }) => {
         try {
             const route = resolveIpcRoute(code);
-            await ipcPost(route, '/delete', { threadRef: route.metadata.threadRef });
-            return { content: [{ type: 'text' as const, text: `Thread ${route.metadata.threadRef} deleted.` }] };
+            const threadRef = requireThreadRef(route);
+            await ipcPost(route, '/delete', { threadRef });
+            return { content: [{ type: 'text' as const, text: `Thread ${threadRef} deleted.` }] };
         } catch (error: unknown) {
             return { content: [{ type: 'text' as const, text: `Error: ${errorMessage(error)}` }] };
         }

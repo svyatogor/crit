@@ -1,13 +1,13 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { sendMessageToSocket } from './claude-messaging';
-import { ClaudeSession, findSessionForWorkspace } from './claude-sessions';
+import { deliverToClaudeCode, sessionLabel } from './claude-delivery';
 import { registerTools } from './copilot-tools';
 import { CRIT_DIAGNOSTIC_SOURCE } from './diagnostic-metadata';
 import { getGitApi } from './git';
 import { startIpcServer } from './ipc-server';
 import { installMcpServer, promptIfMcpMissing, stageServer } from './mcp-install';
 import { buildNudgeMessage, buildPrompt } from './prompts';
+import { requestReview, ReviewTarget } from './review-request';
 import {
     clearProjectRefCache,
     clearThreads,
@@ -23,6 +23,7 @@ import {
     ReviewComment,
     SerializedState,
     serializeState,
+    setCommentController,
     setThreadsChangedHandler,
     threadLabel,
     threadsByRef,
@@ -145,94 +146,6 @@ function getAiProvider(): AiProvider {
         .get<AiProvider>('aiProvider', 'copilot');
 }
 
-/**
- * The terminal Claude Code runs in, if it is running there.
- *
- * Claude Code creates its terminal as `Claude Code` (overridable via
- * CLAUDE_CODE_TERMINAL_TITLE), so match on that rather than grabbing whichever
- * terminal happens to be active — sending a review prompt into an unrelated
- * shell would execute it.
- */
-function findClaudeCodeTerminal(): vscode.Terminal | undefined {
-    const expected = process.env.CLAUDE_CODE_TERMINAL_TITLE || 'Claude Code';
-    const matches = vscode.window.terminals.filter(t => t.name.includes(expected) || t.name.startsWith('✳ '));
-    if (matches.length === 0) return undefined;
-
-    // Prefer the focused one when several are open.
-    const active = vscode.window.activeTerminal;
-    if (active && matches.includes(active)) return active;
-    return matches[matches.length - 1];
-}
-
-/** The Claude Code session running in this workspace, if there is one. */
-function findWorkspaceClaudeSession(): ClaudeSession | undefined {
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder || folder.uri.scheme !== 'file') return undefined;
-
-    try {
-        return findSessionForWorkspace(folder.uri.fsPath, {
-            // Guards the case where VS Code itself was launched from a Claude
-            // session: that session must not review its own comments.
-            excludeSessionId: process.env.CLAUDE_CODE_SESSION_ID,
-        });
-    } catch {
-        return undefined;
-    }
-}
-
-/**
- * Deliver a prompt to Claude Code, preferring paths that keep the user in the
- * conversation they are already having.
- *
- *  1. Terminal — appends to the running CLI session.
- *  2. Live session — cross-session message into the running conversation.
- *  3. New conversation — last resort; the webview cannot be handed a prompt for
- *     a session it already hosts ("Your prompt was not applied").
- */
-async function deliverToClaudeCode(
-    threads: TrackedCommentThread[],
-    prompt: string,
-): Promise<void> {
-    const terminal = findClaudeCodeTerminal();
-    if (terminal) {
-        terminal.show();
-        terminal.sendText(buildNudgeMessage(threads, 'diagnostics'), true);
-        return;
-    }
-
-    const session = findWorkspaceClaudeSession();
-    if (session) {
-        try {
-            await sendMessageToSocket(
-                session.messagingSocketPath,
-                buildNudgeMessage(threads, 'mcp'),
-            );
-            // The inbox never acks, and the session may be off-screen, so say
-            // where the comments went rather than leaving the send invisible.
-            vscode.window.showInformationMessage(
-                `Sent review comments to Claude Code session ${sessionLabel(session)}.`,
-            );
-            return;
-        } catch (error: any) {
-            // The session can exit between discovery and delivery; opening a
-            // new conversation still gets the review in front of the user.
-            outputLog.appendLine(
-                `[Crit] Cross-session delivery failed, opening a new conversation: ${error.message}`,
-            );
-        }
-    }
-
-    await vscode.commands.executeCommand(
-        'claude-vscode.primaryEditor.open',
-        undefined,
-        prompt,
-    );
-}
-
-function sessionLabel(session: ClaudeSession): string {
-    return session.name ?? session.sessionId.slice(0, 8);
-}
-
 async function sendThreadsToAi(threads: TrackedCommentThread[]): Promise<void> {
     if (threads.length === 0) return;
 
@@ -241,7 +154,19 @@ async function sendThreadsToAi(threads: TrackedCommentThread[]): Promise<void> {
 
     try {
         if (provider === 'claudeCode') {
-            await deliverToClaudeCode(threads, prompt);
+            const result = await deliverToClaudeCode({
+                terminal: buildNudgeMessage(threads, 'diagnostics'),
+                message: buildNudgeMessage(threads, 'mcp'),
+                editor: prompt,
+            }, outputLog);
+            if (result.path === 'session' && result.session) {
+                // The inbox never acks, and the session may be off-screen, so
+                // say where the comments went rather than leaving the send
+                // invisible.
+                vscode.window.showInformationMessage(
+                    `Sent review comments to Claude Code session ${sessionLabel(result.session)}.`,
+                );
+            }
             // Not awaited: the prompt is already delivered, and whether the MCP
             // tools are wired up must not hold up the send.
             void promptIfMcpMissing(extensionContext, outputLog);
@@ -440,6 +365,8 @@ export function activate(context: vscode.ExtensionContext) {
 
     const controller = vscode.comments.createCommentController('crit', 'Crit');
     context.subscriptions.push(controller);
+    // Lets the IPC server create threads for comments an agent leaves.
+    setCommentController(controller);
 
     controller.commentingRangeProvider = {
         provideCommentingRanges(document: vscode.TextDocument) {
@@ -709,6 +636,24 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // --- Ask the AI to review the code and leave its own comments ---
+    context.subscriptions.push(
+        vscode.commands.registerCommand('crit.requestReview', () =>
+            requestReview({ kind: 'project' }, context, outputLog)
+        )
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('crit.requestReviewFile', (arg?: vscode.Uri) => {
+            const target = fileReviewTarget(arg);
+            if (!target) {
+                vscode.window.showInformationMessage('Open a file to have the AI review it.');
+                return;
+            }
+            return requestReview(target, context, outputLog);
+        })
+    );
+
     // --- Install the MCP server into Claude Code's user config ---
     context.subscriptions.push(
         vscode.commands.registerCommand('crit.installMcpServer', () => installMcpServer(context, outputLog))
@@ -716,6 +661,16 @@ export function activate(context: vscode.ExtensionContext) {
 
     // --- Register Copilot tools ---
     registerTools(context);
+}
+
+/**
+ * The file a review request names: the URI a menu passed us, else whatever is
+ * in the active editor — the command palette passes nothing.
+ */
+function fileReviewTarget(arg?: vscode.Uri): ReviewTarget | undefined {
+    const uri = arg instanceof vscode.Uri ? arg : vscode.window.activeTextEditor?.document.uri;
+    if (!uri || uri.scheme !== 'file') return undefined;
+    return { kind: 'file', uri };
 }
 
 /** Open threads in `fileKey`, or undefined when the file has no threads. */
@@ -738,11 +693,6 @@ function setCommentMode(commentId: number, mode: vscode.CommentMode): boolean {
 // --------------- Interactive QuickPick Panel ---------------
 
 async function showCommentPanel() {
-    if (threadsByRef.size === 0) {
-        vscode.window.showInformationMessage('No review comments.');
-        return;
-    }
-
     interface ActionItem extends vscode.QuickPickItem {
         action?: string;
         threadRef?: string;
@@ -752,13 +702,26 @@ async function showCommentPanel() {
     const qp = vscode.window.createQuickPick<ActionItem>();
     const openCount = openThreads().length;
     const resolvedCount = threadsByRef.size - openCount;
-    qp.title = `Review Comments (${openCount} open, ${resolvedCount} resolved)`;
+    qp.title = threadsByRef.size === 0
+        ? 'Review Comments (none yet)'
+        : `Review Comments (${openCount} open, ${resolvedCount} resolved)`;
     qp.placeholder = 'Type to search comments… Select an action or comment.';
     qp.matchOnDescription = true;
 
     function buildItems(filter: string): ActionItem[] {
         const items: ActionItem[] = [];
         const lf = filter.toLowerCase();
+
+        // Asking for a review is the one action that makes sense with no
+        // comments on screen, so it leads and the panel stays open when empty.
+        items.push(
+            { label: '$(sparkle) Ask AI to Review Changes', description: 'AI leaves inline comments', action: 'requestReview' },
+            { label: '$(sparkle) Ask AI to Review This File', description: 'Active editor', action: 'requestReviewFile' },
+        );
+
+        if (threadsByRef.size === 0) return items;
+
+        items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
 
         // Global actions (always shown)
         items.push(
@@ -828,6 +791,12 @@ async function showCommentPanel() {
         qp.hide();
 
         switch (pick.action) {
+            case 'requestReview':
+                await vscode.commands.executeCommand('crit.requestReview');
+                break;
+            case 'requestReviewFile':
+                await vscode.commands.executeCommand('crit.requestReviewFile');
+                break;
             case 'submitAll':
                 await vscode.commands.executeCommand('crit.submitAll');
                 break;

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { ClaudeDelivery } from './claude-delivery';
 import { findRelevantHunk, getFileDiffHunks } from './git';
 import {
     commentText,
@@ -14,6 +15,7 @@ import reviewIntro from './prompts/review-intro.md';
 import reviewIntroCodes from './prompts/review-intro-codes.md';
 import reviewOutroMcp from './prompts/review-outro-mcp.md';
 import reviewOutroTools from './prompts/review-outro-tools.md';
+import reviewRequest from './prompts/review-request.md';
 
 /**
  * Everything this extension says to an agent.
@@ -67,6 +69,35 @@ export function buildNudgeMessage(
     }
 
     return render(nudgeMcpTemplate, { subject, code });
+}
+
+/** What a review request asks for, in the wording the template needs. */
+export interface ReviewScope {
+    kind: 'project' | 'file';
+    /** For messages to the user, e.g. `src/git.ts` or `this workspace`. */
+    label: string;
+    /** Argument for `/code-review`, with its leading space, or empty. */
+    args: string;
+    /** Project code the findings are posted against. */
+    code: string;
+}
+
+/**
+ * The review request, in the shape each delivery path needs.
+ *
+ * All three send the `/code-review` slash command — it expands on the terminal,
+ * in a cross-session message, and in a new conversation alike. Only the wrapping
+ * differs: `Terminal.sendText` submits on every newline, so the terminal gets the
+ * template flattened, while the other two keep its line breaks and stay readable
+ * as text.
+ */
+export function buildReviewRequest(scope: ReviewScope): ClaudeDelivery {
+    const request = render(reviewRequest, { args: scope.args, code: scope.code });
+    return {
+        terminal: singleLine(request),
+        message: request,
+        editor: request,
+    };
 }
 
 export async function buildPrompt(
