@@ -21,28 +21,32 @@ type DiagnosticMetadata = NonNullable<ReturnType<typeof parseDiagnosticMetadata>
 interface IpcRoute {
   metadata: DiagnosticMetadata
   port: number
+  /** The window's folder for this project, so a failure can name it. */
+  projectPath: string
 }
 
 const IPC_TIMEOUT_MS = 5000
 
 /**
- * The instance a diagnostic code addresses.
+ * The window a Crit code addresses.
  *
- * Everything about descriptor layout, validity, and liveness belongs to
- * `ipc-registry`; this only turns the code into a session ref and asks for the
- * port.
+ * Resolved per call, never cached: a code names a project and the window holding
+ * it is whatever is open now, which is exactly what lets a code survive the
+ * reload that happens while an agent is mid-review. Everything about descriptor
+ * layout, liveness, and picking between windows belongs to `ipc-registry`.
  */
 function resolveIpcRoute(code: string): IpcRoute {
   const metadata = parseDiagnosticMetadata(code)
   if (!metadata) {
     throw new Error(
-      'Malformed Crit code. Expected `crit:v1;<session>;<project>;<thread>` or, for a ' +
-        'whole project, `crit:v1;<session>;<project>` — each ref an 8-character hex ref. ' +
+      'Malformed Crit code. Expected `crit:v2;<project>;<thread>` or, for a whole project, ' +
+        '`crit:v2;<project>` — each ref an 8-character hex ref. ' +
         'Copy a current code from a Crit diagnostic or review request and try again.',
     )
   }
 
-  return { metadata, port: resolveLiveInstance(metadata.sessionRef).port }
+  const instance = resolveLiveInstance(metadata.projectRef)
+  return { metadata, port: instance.port, projectPath: instance.projectPath }
 }
 
 /**
@@ -57,8 +61,8 @@ function requireThreadRef(route: IpcRoute): string {
   if (threadRef === undefined) {
     throw new Error(
       "This tool acts on one comment thread, so it needs that thread's own code " +
-        '(`crit:v1;<session>;<project>;<thread>`). The code you passed names only a window ' +
-        'and a project. Call listDiffComments with it to read the threads — the listing ' +
+        '(`crit:v2;<project>;<thread>`). The code you passed names only a project. ' +
+        'Call listDiffComments with it to read the threads — the listing ' +
         "prints each one's code.",
     )
   }
@@ -122,9 +126,8 @@ function isTimeout(error: unknown): boolean {
 
 function timeoutError(route: IpcRoute): Error {
   return new Error(
-    `Crit IPC request timed out after ${IPC_TIMEOUT_MS / 1000} seconds for session ` +
-      `${route.metadata.sessionRef}. The instance descriptor may be stale; ensure that the ` +
-      'matching VS Code window is running.',
+    `Crit IPC request timed out after ${IPC_TIMEOUT_MS / 1000} seconds for the window holding ` +
+      `${route.projectPath}. Ensure that window is running and responsive, then try again.`,
   )
 }
 
@@ -134,9 +137,9 @@ function connectionError(route: IpcRoute, error: unknown): Error {
   const cause: unknown = error instanceof Error ? (error as { cause?: unknown }).cause : undefined
   const detail = cause instanceof Error ? `${errorMessage(error)} (${cause.message})` : errorMessage(error)
   return new Error(
-    `Could not connect to Crit session ${route.metadata.sessionRef} on ` +
-      `127.0.0.1:${route.port}: ${detail}. The instance descriptor may be stale; ` +
-      'ensure that the matching VS Code window is running.',
+    `Could not connect to the Crit window holding ${route.projectPath} on ` +
+      `127.0.0.1:${route.port}: ${detail}. The window may have just closed; ` +
+      'ensure it is running and try again.',
   )
 }
 
@@ -190,7 +193,6 @@ registerTool(
         try {
           threadCode = encodeDiagnosticMetadata({
             version: route.metadata.version,
-            sessionRef: route.metadata.sessionRef,
             projectRef: route.metadata.projectRef,
             threadRef: thread.threadRef,
           })
@@ -227,7 +229,7 @@ registerTool(
     code: z
       .string()
       .describe(
-        'Crit code selecting the VS Code window and project — the project code from a review request, or any thread code from the same project',
+        'Crit code naming the project to comment in — the project code from a review request, or any thread code from the same project',
       ),
     file: z
       .string()

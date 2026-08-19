@@ -1,6 +1,4 @@
-import * as fs from 'fs'
 import * as http from 'http'
-import * as path from 'path'
 import * as vscode from 'vscode'
 import { z } from 'zod'
 import { resolveCommentFile, toDocumentLine } from './comment-targets'
@@ -10,17 +8,16 @@ import { resolveCommentFile, toDocumentLine } from './comment-targets'
 import type { IpcInstanceDescriptor } from './ipc-registry'
 import {
   IPC_PROTOCOL_VERSION,
-  ipcDescriptorPath,
   ipcRegistryDir,
-  ipcTempDescriptorName,
-  readDescriptor,
+  removeInstanceDescriptor,
   sweepIpcRegistry,
+  writeInstanceDescriptor,
 } from './ipc-registry'
 import {
   createReviewThread,
   diagnosticCode,
   findThreadByRef,
-  getSessionRef,
+  localProjects,
   projectFolderPaths,
   projectRefFor,
   resolveThread,
@@ -37,61 +34,96 @@ import {
  * review comments, plus the registry entry that makes the window findable.
  */
 
-interface RegisteredIpcInstance {
-  descriptorPath: string
-  descriptor: IpcInstanceDescriptor
+/**
+ * This window's presence in the registry: one descriptor per project it holds,
+ * all naming the same port.
+ *
+ * Held rather than written once because the set is not fixed for the life of the
+ * activation. Adding or removing a workspace folder changes which projects this
+ * window answers for, and gaining focus changes which window a project belongs
+ * to when two of them hold it — so the descriptors are republished, and the ones
+ * for projects the window no longer holds are withdrawn.
+ */
+interface IpcRegistration {
+  port: number
+  startedAt: string
+  lastFocusedAt: string
+  /** Published descriptors by projectRef, so dispose withdraws exactly these. */
+  published: Map<string, IpcInstanceDescriptor>
+  log: vscode.OutputChannel
 }
 
-function registerIpcInstance(port: number, log: vscode.OutputChannel): RegisteredIpcInstance {
-  const sessionRef = getSessionRef()
-  const registryDir = ipcRegistryDir()
-  const descriptorPath = ipcDescriptorPath(sessionRef, registryDir)
-  const tempPath = path.join(registryDir, ipcTempDescriptorName(sessionRef, process.pid))
-  const descriptor: IpcInstanceDescriptor = {
-    protocolVersion: IPC_PROTOCOL_VERSION,
-    sessionRef,
+function registerIpcInstance(port: number, log: vscode.OutputChannel): IpcRegistration {
+  const startedAt = new Date().toISOString()
+  // Descriptors are removed only on clean dispose, so every crashed window
+  // leaks its set. Sweeping here bounds the registry to roughly the projects
+  // open in live windows.
+  const removed = sweepIpcRegistry()
+  if (removed > 0) log.appendLine(`[Crit] Swept ${removed} stale IPC descriptor(s)`)
+
+  const registration: IpcRegistration = {
     port,
-    pid: process.pid,
-    startedAt: new Date().toISOString(),
+    startedAt,
+    lastFocusedAt: startedAt,
+    published: new Map(),
+    log,
   }
-
-  try {
-    fs.mkdirSync(registryDir, { recursive: true })
-    // Descriptors are keyed by a per-activation `sessionRef` and removed
-    // only on clean dispose, so every crashed window leaks one. Sweeping
-    // here bounds the directory to roughly the number of live windows.
-    const removed = sweepIpcRegistry(registryDir)
-    if (removed > 0) {
-      log.appendLine(`[Crit] Swept ${removed} stale IPC descriptor(s)`)
-    }
-    fs.writeFileSync(tempPath, JSON.stringify(descriptor), { encoding: 'utf-8', flag: 'wx' })
-    fs.renameSync(tempPath, descriptorPath)
-    return { descriptorPath, descriptor }
-  } catch (error) {
-    try {
-      fs.unlinkSync(tempPath)
-    } catch {
-      /* best-effort cleanup */
-    }
-    throw error
+  // A single folder failing to publish leaves the others routable, so
+  // `syncIpcRegistration` only logs it. Publishing *nothing* while holding
+  // folders is different: the window is unreachable, and starting a server no
+  // agent can find is worse than failing where the caller logs it.
+  const held = syncIpcRegistration(registration)
+  if (held > 0 && registration.published.size === 0) {
+    throw new Error(`Could not publish any Crit IPC descriptor in ${ipcRegistryDir()}`)
   }
+  return registration
 }
 
-function unregisterIpcInstance(registration: RegisteredIpcInstance): void {
-  try {
-    const current = readDescriptor(registration.descriptorPath)
-    const expected = registration.descriptor
-    const isOwnedDescriptor =
-      current !== undefined &&
-      current.sessionRef === expected.sessionRef &&
-      current.port === expected.port &&
-      current.pid === expected.pid &&
-      current.startedAt === expected.startedAt
+/**
+ * Bring the registry in line with the projects this window holds now.
+ *
+ * Writes are unconditional rather than diffed: a descriptor is a few hundred
+ * bytes written through a temp file and a rename, and the alternative — deciding
+ * whether the copy on disk is still ours — is the reasoning that atomic replace
+ * exists to avoid.
+ *
+ * Returns how many projects this window holds, which is not the same as how many
+ * were published.
+ */
+function syncIpcRegistration(registration: IpcRegistration): number {
+  const projects = localProjects()
 
-    if (isOwnedDescriptor) fs.unlinkSync(registration.descriptorPath)
-  } catch {
-    // Missing, unreadable, or replaced descriptors must not be removed.
+  for (const { projectRef, projectPath } of projects) {
+    const descriptor: IpcInstanceDescriptor = {
+      protocolVersion: IPC_PROTOCOL_VERSION,
+      projectRef,
+      projectPath,
+      port: registration.port,
+      pid: process.pid,
+      startedAt: registration.startedAt,
+      lastFocusedAt: registration.lastFocusedAt,
+    }
+    try {
+      writeInstanceDescriptor(descriptor)
+      registration.published.set(projectRef, descriptor)
+    } catch (error: unknown) {
+      const detail = error instanceof Error ? error.message : String(error)
+      registration.log.appendLine(`[Crit] Could not publish IPC descriptor for project ${projectRef}: ${detail}`)
+    }
   }
+
+  const held = new Set(projects.map((project) => project.projectRef))
+  for (const [projectRef, descriptor] of registration.published) {
+    if (held.has(projectRef)) continue
+    removeInstanceDescriptor(descriptor)
+    registration.published.delete(projectRef)
+  }
+  return projects.length
+}
+
+function unregisterIpcInstance(registration: IpcRegistration): void {
+  for (const descriptor of registration.published.values()) removeInstanceDescriptor(descriptor)
+  registration.published.clear()
 }
 
 /**
@@ -178,12 +210,15 @@ function threadNotFoundMessage(threadRef: unknown): string {
   if (typeof threadRef !== 'string' || threadRef.length === 0) {
     return 'Thread not found: request must include a non-empty string threadRef.'
   }
-  return `Thread with threadRef "${threadRef}" not found in session ${getSessionRef()}.`
+  return (
+    `Thread with threadRef "${threadRef}" not found in this window. It may have been deleted, ` +
+    'or it may belong to another branch — comments are kept per branch.'
+  )
 }
 
 export function startIpcServer(context: vscode.ExtensionContext, log: vscode.OutputChannel): Promise<number> {
   return new Promise((resolve, reject) => {
-    let registration: RegisteredIpcInstance | undefined
+    let registration: IpcRegistration | undefined
     const server = http.createServer(async (req, res) => {
       // CORS headers for local use
       res.setHeader('Content-Type', 'application/json')
@@ -266,7 +301,7 @@ export function startIpcServer(context: vscode.ExtensionContext, log: vscode.Out
             JSON.stringify({
               ok: true,
               comments: threadsByRef.size,
-              sessionRef: getSessionRef(),
+              projects: [...(registration?.published.keys() ?? [])],
             }),
           )
         } else {
@@ -284,7 +319,20 @@ export function startIpcServer(context: vscode.ExtensionContext, log: vscode.Out
       const addr = server.address()
       if (addr && typeof addr !== 'string') {
         try {
-          registration = registerIpcInstance(addr.port, log)
+          const started = registerIpcInstance(addr.port, log)
+          registration = started
+
+          // Which projects this window answers for, and which window a project
+          // belongs to when several hold it, both change while the window is
+          // open — so neither is decided once at activation.
+          context.subscriptions.push(
+            vscode.workspace.onDidChangeWorkspaceFolders(() => syncIpcRegistration(started)),
+            vscode.window.onDidChangeWindowState((state) => {
+              if (!state.focused) return
+              started.lastFocusedAt = new Date().toISOString()
+              syncIpcRegistration(started)
+            }),
+          )
           resolve(addr.port)
         } catch (error) {
           server.close()

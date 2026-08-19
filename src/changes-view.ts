@@ -69,6 +69,8 @@ export class ChangesViewProvider implements vscode.TreeDataProvider<ChangesNode>
   private view: vscode.TreeView<ChangesNode> | undefined
   /** Every file row, flat, whatever the layout — what the batch commands act on. */
   private rows: FileChangeNode[] = []
+  /** A node's folder in tree layout, so `reveal()` can expand its way down to it. */
+  private parents = new Map<ChangesNode, ChangesNode>()
 
   // Declared and assigned rather than taken as constructor parameter
   // properties: the tests load this file through Node's type stripping, which
@@ -160,7 +162,13 @@ export class ChangesViewProvider implements vscode.TreeDataProvider<ChangesNode>
     )
 
     this.updateSummary()
-    return this.isTreeLayout() ? buildFolderTree(this.rows, compactFolders()) : this.rows
+    if (!this.isTreeLayout()) {
+      this.parents = new Map()
+      return this.rows
+    }
+    const tree = buildFolderTree(this.rows, compactFolders())
+    this.parents = indexParents(tree)
+    return tree
   }
 
   getTreeItem(node: ChangesNode): vscode.TreeItem {
@@ -168,9 +176,19 @@ export class ChangesViewProvider implements vscode.TreeDataProvider<ChangesNode>
     return node.kind === 'folder' ? folderItem(node) : fileItem(node, !this.isTreeLayout())
   }
 
+  /** Required by `TreeView.reveal()` to expand its way down to a nested node. */
+  getParent(node: ChangesNode): ChangesNode | undefined {
+    return this.parents.get(node)
+  }
+
   /** Every file a node stands for: itself, or everything beneath a folder. */
   filesOf(node: ChangesNode): readonly FileChangeNode[] {
     return node.kind === 'folder' ? node.files : [node]
+  }
+
+  /** The row for an open document, so the view can follow it — `undefined` if it isn't a tracked change. */
+  findFile(uri: vscode.Uri): FileChangeNode | undefined {
+    return this.rows.find((row) => row.file.uri.toString() === uri.toString())
   }
 
   /**
@@ -256,7 +274,6 @@ function folderItem(node: FolderChangeNode): vscode.TreeItem {
   item.resourceUri = iconResource(node.resourceUri)
   item.iconPath = vscode.ThemeIcon.Folder
   item.contextValue = 'critChangeFolder'
-  const reviewed = node.files.filter((file) => file.state === 'reviewed').length
   const stale = node.files.filter((file) => file.state === 'stale').length
   const comments = node.files.reduce((total, file) => total + file.comments, 0)
   item.checkboxState = {
@@ -265,9 +282,7 @@ function folderItem(node: FolderChangeNode): vscode.TreeItem {
       : vscode.TreeItemCheckboxState.Unchecked,
     tooltip: stale > 0 ? `${stale} changed since you reviewed — click to mark all reviewed` : 'Mark all as reviewed',
   }
-  item.description = [`${reviewed}/${node.files.length}`, commentMarker(comments), stale > 0 ? `${stale} stale` : '']
-    .filter(Boolean)
-    .join(' · ')
+  item.description = [commentMarker(comments), stale > 0 ? `${stale} stale` : ''].filter(Boolean).join(' · ')
   return item
 }
 
@@ -375,6 +390,19 @@ function finish(builder: FolderBuilder, compact: boolean): FolderChangeNode {
   const children: ChangesNode[] = [...folders, ...builder.files]
   const files = [...folders.flatMap((folder) => folder.files), ...builder.files]
   return { kind: 'folder', label: builder.label, resourceUri: builder.resourceUri, children, files }
+}
+
+/** Every node's immediate parent, for `TreeDataProvider.getParent()`. */
+function indexParents(nodes: readonly ChangesNode[]): Map<ChangesNode, ChangesNode> {
+  const parents = new Map<ChangesNode, ChangesNode>()
+  const walk = (children: readonly ChangesNode[], parent: ChangesNode | undefined) => {
+    for (const child of children) {
+      if (parent) parents.set(child, parent)
+      if (child.kind === 'folder') walk(child.children, child)
+    }
+  }
+  walk(nodes, undefined)
+  return parents
 }
 
 /** `a` → `a/b` → `a/b/c` while a folder's only child is another folder. */

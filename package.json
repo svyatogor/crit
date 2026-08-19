@@ -2,7 +2,7 @@
   "name": "crit",
   "displayName": "Crit",
   "description": "Crit — pair review with your AI. Inline code review comments — review AI-generated changes, submit feedback in batch to Copilot, Claude Code, or any AI agent, with git diff context",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "publisher": "svyatogor",
   "icon": "icon.png",
   "repository": {

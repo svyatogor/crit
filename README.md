@@ -140,20 +140,21 @@ Every open review thread is also published as a VS Code **Information** diagnost
 `Diagnostic.code` carries a short review label followed by the routing code, and is intentionally not added to the visible message:
 
 ```text
-R3 crit:v1;<session>;<project>;<thread>
+R3 crit:v2;<project>;<thread>
 ````
 
 The leading `R3` is a display label — the same id used in generated prompts and in `listDiffComments` output, so a comment can be referred to by name in conversation. It is **never an address**: all tools route on the thread ref inside the code, because review labels are per-branch sequence numbers and are reused across branches.
 
-| Field     | Lifetime and purpose                                                                                                                                                   |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `session` | Random identifier for the current extension-host/window activation; changes after reload or restart                                                                    |
-| `project` | Stable hash of the containing workspace-folder identity; distinct per root in multi-root workspaces and does not expose its path                                       |
-| `thread`  | Stable random identifier persisted with the review thread across reloads and branch inheritance — omitted by a project code, which addresses a window and project only |
+| Field     | Lifetime and purpose                                                                                                                                        |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `project` | Stable hash of the containing workspace-folder identity; distinct per root in multi-root workspaces and does not expose its path                            |
+| `thread`  | Stable random identifier persisted with the review thread across reloads and branch inheritance — omitted by a project code, which addresses a project only |
 
-Each ref is 8 hex characters. They are routing metadata, **not authentication credentials**, so they carry only enough entropy to stay unique across the windows, projects, and threads on one machine — keeping `Diagnostic.code` short enough to read in the Problems view.
+Each ref is 8 hex characters. They are routing metadata, **not authentication credentials**, so they carry only enough entropy to stay unique across the projects and threads on one machine — keeping `Diagnostic.code` short enough to read in the Problems view.
 
-`Diagnostic.code` is a plain string by design. The object form (`{value, target}`) renders more compactly in the Problems view, but AI integrations that read diagnostics stringify this field and would receive `[object Object]`. AI integrations must preserve the code; the MCP server uses its fields to select the owning VS Code window, project, and thread. Tools also accept a code pasted with its `R3 ` prefix intact.
+**A code names no window, deliberately.** Both refs are re-derivable from durable inputs — the project's real path, and the thread ref persisted with the thread — so a code an agent was handed at the start of a review is still valid at the end of it. Anything identifying a particular extension-host activation would not be: reloading the window, or an SSH reconnect that restarts the remote extension host, replaces the activation and its loopback port. Which window a code reaches is therefore resolved at call time, not baked into the code.
+
+`Diagnostic.code` is a plain string by design. The object form (`{value, target}`) renders more compactly in the Problems view, but AI integrations that read diagnostics stringify this field and would receive `[object Object]`. AI integrations must preserve the code; the MCP server uses its fields to find the window holding the project and, within it, the thread. Tools also accept a code pasted with its `R3 ` prefix intact.
 
 ### 4 Copilot Language Model Tools
 
@@ -182,21 +183,21 @@ Agent: [calls #listDiffComments] → sees 3 open comments
 
 The extension includes a standalone MCP server that any MCP-compatible AI client can connect to for real-time access to review comments. Available tools: `listDiffComments`, `addDiffComment`, `replyToDiffComment`, `resolveDiffComment`, `deleteDiffComment`.
 
-Every MCP tool takes a `code`. A **thread code** comes from a Crit diagnostic and identifies the VS Code window, the workspace project, and one review thread:
+Every MCP tool takes a `code`. A **thread code** comes from a Crit diagnostic and identifies the workspace project and one review thread within it:
 
 ```text
-crit:v1;<session>;<project>;<thread>
+crit:v2;<project>;<thread>
 ```
 
-A **project code** drops the thread segment and identifies just the window and project:
+A **project code** drops the thread segment and identifies just the project:
 
 ```text
-crit:v1;<session>;<project>
+crit:v2;<project>
 ```
 
 That shorter form exists because [a review request](#ask-the-ai-to-review-your-code) has to be addressable before any comment exists — the agent is being asked to _create_ the threads, so there is no thread to name yet.
 
-- `listDiffComments({ code })` routes to the encoded window and lists comments from the encoded project — either code shape
+- `listDiffComments({ code })` routes to the window holding the encoded project and lists its comments — either code shape
 - `addDiffComment({ code, file, line, endLine?, text })` creates a new comment thread in the encoded project — either code shape; answers with the new thread's own code
 - `replyToDiffComment({ code, text })` replies to the encoded thread
 - `resolveDiffComment({ code })` resolves the encoded thread
@@ -206,7 +207,7 @@ The last three act on exactly one thread, so they require a thread code and refu
 
 `addDiffComment` counts lines **from 1**, as every listing and diagnostic reports them. `file` is resolved relative to the workspace folders of the addressed project; a line past the end of the file is clamped to the last line rather than refused, since an agent may be reading a diff of a file the user has since edited. Paths that resolve outside those folders are rejected — the IPC server listens on loopback, so `projectRef` bounds where a comment can land and is not merely a lookup key.
 
-Always pass a current diagnostic code unchanged. A code from a closed or reloaded window is intentionally rejected as stale.
+Always pass a diagnostic code unchanged. A code stays valid for as long as the project is open in some window — including across window reloads — and is rejected only when no live window holds that project, which the error says in as many words.
 
 **Claude Code:**
 Run **Crit: Install MCP Server for Claude Code** from the Command Palette. It registers the server as `crit` at **user** scope, so it is available in every directory, and re-running it repairs a stale entry.
@@ -309,7 +310,9 @@ src/
   mcp-install.ts         — Stages the MCP bundle at a version-stable path, registers it with Claude Code
 ```
 
-**IPC Server**: Every VS Code window starts a local HTTP server on `127.0.0.1` using a random port. It atomically publishes `${TMPDIR}/crit/instances/<sessionRef>.json`. The MCP server parses the code, reads the descriptor named by its `sessionRef`, scopes listing and comment creation by `projectRef`, and addresses mutations by `threadRef`. Closing a window removes only its own descriptor. All comment reads/writes still go through the owning extension instance as the single source of truth.
+**IPC Server**: Every VS Code window starts a local HTTP server on `127.0.0.1` using a random port, and publishes one atomically-written descriptor per project it holds at `${TMPDIR}/crit/projects/<projectRef>/<pid>.json`. The `projectRef` is the lookup key rather than a field in the file, so resolving a code costs the MCP server a single directory listing — no fan-out across windows, no round trips to ports that may since have been recycled. It then scopes listing and comment creation by `projectRef` and addresses mutations by `threadRef`. Descriptors are republished when workspace folders change and when the window gains focus, swept on activation for pids that are gone, and withdrawn on clean dispose. All comment reads/writes still go through the owning extension instance as the single source of truth.
+
+A descriptor is trusted only while its `pid` is alive, which is the whole of the staleness defence: for a leaked descriptor to reach an unrelated process, the dead pid would have to have been reused by a live process that also happens to be listening on the recycled port — and even then `/comment` validates `projectRef` against the window's own folders and every mutation is addressed by a `threadRef` the window holds. When one project is open in **several** windows, the descriptor that was focused most recently wins, falling back to activation time; note that two windows on one folder already share (and clobber) VS Code's `workspaceState`, where comments and marks live, so that configuration is degraded independently of routing.
 
 **Branch Scoping**: Comments are stored under `crit.state.{repoName}.{branchName}` in VS Code's workspace state. Branch switches are detected via the git extension API.
 

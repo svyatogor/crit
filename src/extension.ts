@@ -354,6 +354,28 @@ function setupViews(context: vscode.ExtensionContext) {
   comments.attach(commentsTree)
   context.subscriptions.push(commentsTree)
 
+  // --- Follow the active editor, the way the Explorer view does ---
+  //
+  // Silent on anything not tracked as a change (an untouched file, the output
+  // panel) and never steals focus — it only moves the selection, the same
+  // restraint `explorer.autoReveal` uses.
+  const revealActiveFile = async (editor: vscode.TextEditor | undefined) => {
+    const node = editor && changes.findFile(editor.document.uri)
+    if (!node) return
+    try {
+      await changesTree.reveal(node, { select: true, focus: false, expand: true })
+    } catch {
+      // Reveal can lose a race with an in-flight refresh rebuilding the tree
+      // out from under it; the next editor switch tries again.
+    }
+  }
+  context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(revealActiveFile))
+  context.subscriptions.push(
+    changesTree.onDidChangeVisibility((e) => {
+      if (e.visible) void revealActiveFile(vscode.window.activeTextEditor)
+    }),
+  )
+
   // The checkbox is the primary way in and out of a mark; the context-menu
   // commands go through the same two calls. Ticking a folder acts on every file
   // beneath it.
@@ -789,7 +811,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('crit.copyThread', async (arg: unknown) => {
       const thread = asThread(arg) ?? requireTrackedThread(arg as vscode.CommentThread)
-      const prompt = await buildPrompt([thread])
+      const prompt = await buildPrompt([thread], getAiProvider() === 'claudeCode')
       await vscode.env.clipboard.writeText(prompt)
       vscode.window.showInformationMessage('Comment prompt copied to clipboard.')
     }),
@@ -803,7 +825,7 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage('No open comments to copy.')
         return
       }
-      const prompt = await buildPrompt(open)
+      const prompt = await buildPrompt(open, getAiProvider() === 'claudeCode')
       await vscode.env.clipboard.writeText(prompt)
       vscode.window.showInformationMessage(`${open.length} comment(s) copied to clipboard.`)
     }),
@@ -820,7 +842,7 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage('No open comments in this file.')
         return
       }
-      const prompt = await buildPrompt(open)
+      const prompt = await buildPrompt(open, getAiProvider() === 'claudeCode')
       await vscode.env.clipboard.writeText(prompt)
       vscode.window.showInformationMessage(`${open.length} comment(s) from ${fileKey} copied to clipboard.`)
     }),

@@ -1,10 +1,9 @@
-import { countBy } from 'es-toolkit'
+import { countBy, uniqBy } from 'es-toolkit'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as vscode from 'vscode'
 import {
   createProjectRef,
-  createSessionRef,
   createThreadRef,
   CRIT_DIAGNOSTIC_VERSION,
   encodeDiagnosticMetadata,
@@ -296,13 +295,6 @@ export function diagnosticMessage(thread: vscode.CommentThread): string {
 
 // --------------- Refs ---------------
 
-/** Regenerated on every activation; identifies this window to the MCP server. */
-const sessionRef = createSessionRef()
-
-export function getSessionRef(): string {
-  return sessionRef
-}
-
 function canonicalProjectIdentity(uri: vscode.Uri): string {
   const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri)
   const ownerUri =
@@ -350,14 +342,13 @@ export function clearProjectRefCache(): void {
 export function diagnosticCode(thread: TrackedCommentThread): string {
   return encodeDiagnosticMetadata({
     version: CRIT_DIAGNOSTIC_VERSION,
-    sessionRef,
     projectRef: projectRefFor(thread.uri),
     threadRef: thread.threadRef,
   })
 }
 
 /**
- * The code addressing this window and the project owning `uri`, with no thread.
+ * The code addressing the project owning `uri`, with no thread.
  *
  * What a review request is handed: the agent is being asked to create the
  * threads, so there is no thread to name yet.
@@ -365,9 +356,24 @@ export function diagnosticCode(thread: TrackedCommentThread): string {
 export function projectCode(uri: vscode.Uri): string {
   return encodeDiagnosticMetadata({
     version: CRIT_DIAGNOSTIC_VERSION,
-    sessionRef,
     projectRef: projectRefFor(uri),
   })
+}
+
+/**
+ * Every project this window holds, as the IPC registry publishes them.
+ *
+ * Deduplicated by ref, not by path: two folders that resolve to the same real
+ * directory are one project, and publishing both would file two descriptors for
+ * it under the same pid.
+ */
+export function localProjects(): { projectRef: string; projectPath: string }[] {
+  return uniqBy(
+    (vscode.workspace.workspaceFolders ?? [])
+      .filter((folder) => folder.uri.scheme === 'file')
+      .map((folder) => ({ projectRef: projectRefFor(folder.uri), projectPath: folder.uri.fsPath })),
+    (project) => project.projectRef,
+  )
 }
 
 /**
