@@ -1,3 +1,4 @@
+import { countBy } from 'es-toolkit'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as vscode from 'vscode'
@@ -255,6 +256,36 @@ export function commentText(comment: vscode.Comment): string {
  */
 export function threadLabel(thread: TrackedCommentThread): string {
   return `R${thread.threadId}`
+}
+
+/**
+ * Every tracked thread grouped by its file, keyed by the workspace-relative
+ * path the UI shows and the file-level batch commands address.
+ */
+export function getThreadsByFile(): Map<string, TrackedCommentThread[]> {
+  // A Map rather than a plain object: callers key it on a path, and a file
+  // named `toString` would find something on `Object.prototype`.
+  return Map.groupBy([...threadsByRef.values()], (thread) => vscode.workspace.asRelativePath(thread.uri))
+}
+
+/**
+ * How many open threads sit in each file, keyed by absolute path.
+ *
+ * Keyed by `fsPath` rather than the relative path `getThreadsByFile` uses,
+ * because the caller is the changed-file listing, which addresses files by the
+ * URI git gave it. Resolved threads are left out: the count exists to say
+ * "there is feedback here to deal with".
+ */
+export function openThreadCountsByPath(): Map<string, number> {
+  return new Map(Object.entries(countBy(openThreads(), (thread) => thread.uri.fsPath)))
+}
+
+/** First line of a thread, trimmed to fit a list row. */
+export function threadPreview(thread: vscode.CommentThread): string {
+  const first = thread.comments[0]
+  if (!first) return '(empty)'
+  const text = commentText(first)
+  return text.length > 55 ? text.substring(0, 52) + '...' : text
 }
 
 export function diagnosticMessage(thread: vscode.CommentThread): string {

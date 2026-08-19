@@ -1,0 +1,19 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Monochrome derivation of icon.png: the gutter line with its "+" node,
+       wired across to a comment bubble. Strokes use currentColor so the
+       activity bar can tint it active/inactive. -->
+  <g transform="translate(-2.117 -2.049) scale(1.171)" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="translate(-0.892 0)">
+      <path d="M6.5 3.6V8.6M6.5 15.4V20.4"/>
+      <circle cx="6.5" cy="12" r="3.3"/>
+      <path d="M4.9 12H8.1M6.5 10.4V13.6"/>
+    </g>
+    <path d="M8.908 12H11.603"/>
+    <g transform="translate(0.203 0)">
+      <path d="M13.4 6.8H19.6Q21.6 6.8 21.6 8.8V13.2Q21.6 15.2 19.6 15.2H15.4L13.1 17.4V15.2Q11.4 15.2 11.4 13.2V8.8Q11.4 6.8 13.4 6.8Z"/>
+      <path d="M13.9 10.2H19.1M13.9 12.6H17.4"/>
+    </g>
+  </g>
+  <circle cx="4.45" cy="1.347" r="1.347" fill="currentColor"/>
+  <circle cx="4.45" cy="22.663" r="1.347" fill="currentColor"/>
+</svg>

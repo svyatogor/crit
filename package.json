@@ -2,7 +2,7 @@
   "name": "crit",
   "displayName": "Crit",
   "description": "Crit — pair review with your AI. Inline code review comments — review AI-generated changes, submit feedback in batch to Copilot, Claude Code, or any AI agent, with git diff context",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "publisher": "svyatogor",
   "icon": "icon.png",
   "repository": {
@@ -10,7 +10,7 @@
     "url": "https://github.com/svyatogor/crit"
   },
   "engines": {
-    "vscode": "^1.93.0",
+    "vscode": "^1.110.0",
     "node": ">=22.18"
   },
   "categories": [
@@ -63,100 +63,474 @@
       {
         "command": "crit.createNote",
         "title": "Add Comment",
-        "icon": "$(check)"
+        "icon": "$(check)",
+        "category": "Crit"
       },
       {
         "command": "crit.reply",
         "title": "Reply",
-        "icon": "$(reply)"
+        "icon": "$(reply)",
+        "category": "Crit"
       },
       {
         "command": "crit.editComment",
         "title": "Edit",
-        "icon": "$(edit)"
+        "icon": "$(edit)",
+        "category": "Crit"
       },
       {
         "command": "crit.saveEdit",
         "title": "Save",
-        "icon": "$(check)"
+        "icon": "$(check)",
+        "category": "Crit"
       },
       {
         "command": "crit.cancelEdit",
         "title": "Cancel",
-        "icon": "$(close)"
+        "icon": "$(close)",
+        "category": "Crit"
       },
       {
         "command": "crit.deleteNote",
         "title": "Delete",
-        "icon": "$(trash)"
+        "icon": "$(trash)",
+        "category": "Crit"
       },
       {
         "command": "crit.sendThread",
         "title": "Send to AI",
-        "icon": "$(send)"
+        "icon": "$(send)",
+        "category": "Crit"
       },
       {
         "command": "crit.resolve",
         "title": "Resolve",
-        "icon": "$(check-all)"
+        "icon": "$(check-all)",
+        "category": "Crit"
       },
       {
         "command": "crit.unresolve",
         "title": "Reopen",
-        "icon": "$(debug-restart)"
-      },
-      {
-        "command": "crit.showPanel",
-        "title": "Crit: Show Comments Panel",
-        "icon": "$(comment-discussion)"
+        "icon": "$(debug-restart)",
+        "category": "Crit"
       },
       {
         "command": "crit.submitAll",
-        "title": "Crit: Send All to AI",
-        "icon": "$(send)"
+        "title": "Send All to AI",
+        "icon": "$(send)",
+        "category": "Crit"
       },
       {
         "command": "crit.resolveAll",
-        "title": "Crit: Resolve All",
-        "icon": "$(check-all)"
+        "title": "Resolve All",
+        "icon": "$(check-all)",
+        "category": "Crit"
       },
       {
         "command": "crit.deleteResolved",
-        "title": "Crit: Delete All Resolved",
-        "icon": "$(trash)"
+        "title": "Delete All Resolved",
+        "icon": "$(trash)",
+        "category": "Crit"
       },
       {
         "command": "crit.clearAll",
-        "title": "Crit: Clear All Comments",
-        "icon": "$(clear-all)"
+        "title": "Clear All Comments",
+        "icon": "$(clear-all)",
+        "category": "Crit"
       },
       {
         "command": "crit.copyThread",
         "title": "Copy to Clipboard",
-        "icon": "$(clippy)"
+        "icon": "$(clippy)",
+        "category": "Crit"
       },
       {
         "command": "crit.copyAll",
-        "title": "Crit: Copy All to Clipboard",
-        "icon": "$(clippy)"
+        "title": "Copy All to Clipboard",
+        "icon": "$(clippy)",
+        "category": "Crit"
       },
       {
         "command": "crit.requestReview",
-        "title": "Crit: Ask Claude to Review Changes",
-        "icon": "$(sparkle)"
+        "title": "Ask Claude to Review Changes",
+        "icon": "$(sparkle)",
+        "category": "Crit"
       },
       {
         "command": "crit.requestReviewFile",
-        "title": "Crit: Ask Claude to Review This File",
-        "icon": "$(sparkle)"
+        "title": "Ask Claude to Review This File",
+        "icon": "$(sparkle)",
+        "category": "Crit"
       },
       {
         "command": "crit.installMcpServer",
-        "title": "Crit: Install MCP Server for Claude Code",
-        "icon": "$(plug)"
+        "title": "Install MCP Server for Claude Code",
+        "icon": "$(plug)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.submitFile",
+        "title": "Send File's Comments to AI",
+        "icon": "$(send)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.copyFile",
+        "title": "Copy File's Comments to Clipboard",
+        "icon": "$(clippy)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.resolveFile",
+        "title": "Resolve All Comments in File",
+        "icon": "$(check-all)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.deleteResolvedFile",
+        "title": "Delete Resolved Comments in File",
+        "icon": "$(trash)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.openChange",
+        "title": "Open Changes",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.markReviewed",
+        "title": "Mark as Reviewed",
+        "icon": "$(check)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.unmarkReviewed",
+        "title": "Mark as Not Reviewed",
+        "icon": "$(circle-large-outline)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.showChangesSinceReviewed",
+        "title": "Show Changes Since I Reviewed",
+        "icon": "$(diff)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.markAllReviewed",
+        "title": "Mark All Files Reviewed",
+        "icon": "$(check-all)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.clearReviewed",
+        "title": "Clear All Reviewed Marks",
+        "icon": "$(clear-all)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.refreshChanges",
+        "title": "Refresh",
+        "icon": "$(refresh)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.changesAsTree",
+        "title": "View as Tree",
+        "icon": "$(list-tree)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.changesAsList",
+        "title": "View as List",
+        "icon": "$(list-flat)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.goToThread",
+        "title": "Go to Comment",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.deleteThread",
+        "title": "Delete Comment Thread",
+        "icon": "$(trash)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.filterComments",
+        "title": "Filter Comments",
+        "icon": "$(filter)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.clearCommentsFilter",
+        "title": "Clear Comment Filter",
+        "icon": "$(filter-filled)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.hideResolvedComments",
+        "title": "Hide Resolved Comments",
+        "icon": "$(eye)",
+        "category": "Crit"
+      },
+      {
+        "command": "crit.showResolvedComments",
+        "title": "Show Resolved Comments",
+        "icon": "$(eye-closed)",
+        "category": "Crit"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "crit",
+          "title": "Crit",
+          "icon": "media/crit.svg"
+        }
+      ]
+    },
+    "views": {
+      "crit": [
+        {
+          "id": "crit.changes",
+          "name": "Changes",
+          "contextualTitle": "Crit"
+        },
+        {
+          "id": "crit.comments",
+          "name": "Comments",
+          "contextualTitle": "Crit"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "crit.changes",
+        "contents": "No changes against HEAD.\n\nOnce you or an agent edits something, the files show up here and you can tick them off as you review them.\n[Ask AI to Review Changes](command:crit.requestReview)"
+      },
+      {
+        "view": "crit.comments",
+        "contents": "No review comments yet.\n\nHover a line gutter in any file and click the + to leave one, or have the AI review the change and comment first.\n[Ask AI to Review Changes](command:crit.requestReview)"
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "crit.submitFile",
+          "when": "false"
+        },
+        {
+          "command": "crit.copyFile",
+          "when": "false"
+        },
+        {
+          "command": "crit.resolveFile",
+          "when": "false"
+        },
+        {
+          "command": "crit.deleteResolvedFile",
+          "when": "false"
+        },
+        {
+          "command": "crit.openChange",
+          "when": "false"
+        },
+        {
+          "command": "crit.markReviewed",
+          "when": "false"
+        },
+        {
+          "command": "crit.unmarkReviewed",
+          "when": "false"
+        },
+        {
+          "command": "crit.showChangesSinceReviewed",
+          "when": "false"
+        },
+        {
+          "command": "crit.refreshChanges",
+          "when": "false"
+        },
+        {
+          "command": "crit.changesAsTree",
+          "when": "false"
+        },
+        {
+          "command": "crit.changesAsList",
+          "when": "false"
+        },
+        {
+          "command": "crit.goToThread",
+          "when": "false"
+        },
+        {
+          "command": "crit.deleteThread",
+          "when": "false"
+        },
+        {
+          "command": "crit.hideResolvedComments",
+          "when": "false"
+        },
+        {
+          "command": "crit.showResolvedComments",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "crit.requestReview",
+          "when": "view == crit.changes",
+          "group": "navigation@1"
+        },
+        {
+          "command": "crit.markAllReviewed",
+          "when": "view == crit.changes",
+          "group": "navigation@2"
+        },
+        {
+          "command": "crit.changesAsTree",
+          "when": "view == crit.changes && !crit.changesAsTree",
+          "group": "navigation@3"
+        },
+        {
+          "command": "crit.changesAsList",
+          "when": "view == crit.changes && crit.changesAsTree",
+          "group": "navigation@3"
+        },
+        {
+          "command": "crit.refreshChanges",
+          "when": "view == crit.changes",
+          "group": "navigation@4"
+        },
+        {
+          "command": "crit.clearReviewed",
+          "when": "view == crit.changes",
+          "group": "1_crit"
+        },
+        {
+          "command": "crit.submitAll",
+          "when": "view == crit.comments",
+          "group": "navigation@1"
+        },
+        {
+          "command": "crit.copyAll",
+          "when": "view == crit.comments",
+          "group": "navigation@2"
+        },
+        {
+          "command": "crit.filterComments",
+          "when": "view == crit.comments && !crit.commentsFiltered",
+          "group": "navigation@3"
+        },
+        {
+          "command": "crit.clearCommentsFilter",
+          "when": "view == crit.comments && crit.commentsFiltered",
+          "group": "navigation@3"
+        },
+        {
+          "command": "crit.hideResolvedComments",
+          "when": "view == crit.comments && !crit.hidingResolved",
+          "group": "navigation@4"
+        },
+        {
+          "command": "crit.showResolvedComments",
+          "when": "view == crit.comments && crit.hidingResolved",
+          "group": "navigation@4"
+        },
+        {
+          "command": "crit.resolveAll",
+          "when": "view == crit.comments",
+          "group": "1_crit@1"
+        },
+        {
+          "command": "crit.deleteResolved",
+          "when": "view == crit.comments",
+          "group": "1_crit@2"
+        },
+        {
+          "command": "crit.clearAll",
+          "when": "view == crit.comments",
+          "group": "1_crit@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "crit.showChangesSinceReviewed",
+          "when": "view == crit.changes && viewItem == critChange.stale",
+          "group": "inline@1"
+        },
+        {
+          "command": "crit.markReviewed",
+          "when": "view == crit.changes && viewItem == critChange.stale",
+          "group": "inline@2"
+        },
+        {
+          "command": "crit.requestReviewFile",
+          "when": "view == crit.changes && viewItem =~ /^critChange\\./",
+          "group": "inline@3"
+        },
+        {
+          "command": "crit.openChange",
+          "when": "view == crit.changes && viewItem =~ /^critChange\\./",
+          "group": "1_open"
+        },
+        {
+          "command": "crit.markReviewed",
+          "when": "view == crit.changes && (viewItem == critChange.unreviewed || viewItem == critChangeFolder)",
+          "group": "2_review"
+        },
+        {
+          "command": "crit.unmarkReviewed",
+          "when": "view == crit.changes && viewItem != critChange.unreviewed",
+          "group": "2_review"
+        },
+        {
+          "command": "crit.sendThread",
+          "when": "view == crit.comments && viewItem == critThread.open",
+          "group": "inline@1"
+        },
+        {
+          "command": "crit.resolve",
+          "when": "view == crit.comments && viewItem == critThread.open",
+          "group": "inline@2"
+        },
+        {
+          "command": "crit.unresolve",
+          "when": "view == crit.comments && viewItem == critThread.resolved",
+          "group": "inline@2"
+        },
+        {
+          "command": "crit.copyThread",
+          "when": "view == crit.comments && viewItem =~ /^critThread/",
+          "group": "1_crit"
+        },
+        {
+          "command": "crit.deleteThread",
+          "when": "view == crit.comments && viewItem =~ /^critThread/",
+          "group": "2_crit"
+        },
+        {
+          "command": "crit.submitFile",
+          "when": "view == crit.comments && viewItem == critCommentFile",
+          "group": "inline@1"
+        },
+        {
+          "command": "crit.copyFile",
+          "when": "view == crit.comments && viewItem == critCommentFile",
+          "group": "1_crit"
+        },
+        {
+          "command": "crit.resolveFile",
+          "when": "view == crit.comments && viewItem == critCommentFile",
+          "group": "1_crit"
+        },
+        {
+          "command": "crit.deleteResolvedFile",
+          "when": "view == crit.comments && viewItem == critCommentFile",
+          "group": "2_crit"
+        }
+      ],
       "scm/title": [
         {
           "command": "crit.requestReview",
@@ -326,6 +700,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@vscode/vsce": "^3.9.2",
+    "es-toolkit": "^1.51.0",
     "which": "^7.0.0",
     "zod": "^3.24.4"
   },

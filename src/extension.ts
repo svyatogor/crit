@@ -1,12 +1,18 @@
+import { debounce, orderBy } from 'es-toolkit'
 import * as vscode from 'vscode'
 import * as path from 'path'
+import { type ChangesNode, ChangesViewProvider, type FileChangeNode } from './changes-view'
 import { deliverToClaudeCode, sessionLabel } from './claude-delivery'
+import { promptIfCommentsViewReveals } from './comments-view-reveal'
+import { CommentsViewProvider } from './comments-view'
 import { registerTools } from './copilot-tools'
 import { CRIT_DIAGNOSTIC_SOURCE } from './diagnostic-metadata'
-import { getGitApi } from './git'
+import { getGitApi, headUri, isUntracked, onChangedFilesChanged } from './git'
+import type { Repository } from './vscode-git'
 import { startIpcServer } from './ipc-server'
 import { installMcpServer, promptIfMcpMissing, stageServer } from './mcp-install'
 import { buildNudgeMessage, buildPrompt } from './prompts'
+import { createReviewProgress, type ReviewProgress, snapshotDirFor } from './review-progress'
 import { requestReview, type ReviewTarget } from './review-request'
 import {
   clearProjectRefCache,
@@ -15,6 +21,7 @@ import {
   diagnosticMessage,
   findThreadByRef,
   findThreadForComment,
+  getThreadsByFile,
   isResolved,
   openThreads,
   requireTrackedThread,
@@ -32,60 +39,37 @@ import {
   unresolveThread,
   untrackThread,
 } from './review-threads'
+import { registerSnapshotProvider, snapshotUri } from './snapshot-content'
 
-// --------------- Helpers ---------------
-
-function getThreadsByFile(): Map<string, TrackedCommentThread[]> {
-  const byFile = new Map<string, TrackedCommentThread[]>()
-  for (const thread of threadsByRef.values()) {
-    const rel = vscode.workspace.asRelativePath(thread.uri)
-    if (!byFile.has(rel)) byFile.set(rel, [])
-    byFile.get(rel)!.push(thread)
-  }
-  return byFile
-}
-
-function threadPreview(thread: vscode.CommentThread): string {
-  const first = thread.comments[0]
-  const text = typeof first.body === 'string' ? first.body : first.body.value
-  return text.length > 55 ? text.substring(0, 52) + '...' : text
-}
+// --------------- Diagnostics ---------------
 
 function refreshDiagnostics() {
   if (!diagnosticCollection) return
 
-  const byUri = new Map<string, { uri: vscode.Uri; diagnostics: vscode.Diagnostic[] }>()
-  for (const thread of threadsByRef.values()) {
-    if (isResolved(thread)) continue
-
-    const uriKey = thread.uri.toString()
-    let entry = byUri.get(uriKey)
-    if (!entry) {
-      entry = { uri: thread.uri, diagnostics: [] }
-      byUri.set(uriKey, entry)
-    }
-
-    const diagnostic = new vscode.Diagnostic(
-      thread.range,
-      diagnosticMessage(thread),
-      vscode.DiagnosticSeverity.Information,
-    )
-    diagnostic.source = CRIT_DIAGNOSTIC_SOURCE
-    // Must stay a plain string. The object form (`{value, target}`) renders
-    // more nicely in the Problems view, but agents that read diagnostics
-    // stringify this field and receive "[object Object]", losing both the
-    // label and the routing code.
-    //
-    // The label leads so the Problems view is scannable ("R3 …"), and the
-    // routing code follows so an agent reading the diagnostic can still
-    // address the thread over MCP.
-    diagnostic.code = `${threadLabel(thread)} ${diagnosticCode(thread)}`
-    entry.diagnostics.push(diagnostic)
-  }
+  const byUri = Map.groupBy(openThreads(), (thread) => thread.uri.toString())
 
   diagnosticCollection.clear()
-  for (const { uri, diagnostics } of byUri.values()) {
-    diagnosticCollection.set(uri, diagnostics)
+  for (const threads of byUri.values()) {
+    const diagnostics = threads.map((thread) => {
+      const diagnostic = new vscode.Diagnostic(
+        thread.range,
+        diagnosticMessage(thread),
+        vscode.DiagnosticSeverity.Information,
+      )
+      diagnostic.source = CRIT_DIAGNOSTIC_SOURCE
+      // Must stay a plain string. The object form (`{value, target}`) renders
+      // more nicely in the Problems view, but agents that read diagnostics
+      // stringify this field and receive "[object Object]", losing both the
+      // label and the routing code.
+      //
+      // The label leads so the Problems view is scannable ("R3 …"), and the
+      // routing code follows so an agent reading the diagnostic can still
+      // address the thread over MCP.
+      diagnostic.code = `${threadLabel(thread)} ${diagnosticCode(thread)}`
+      return diagnostic
+    })
+    // Grouped by URI string, so every thread in the group shares one URI.
+    diagnosticCollection.set(threads[0].uri, diagnostics)
   }
 }
 
@@ -93,10 +77,17 @@ function refreshDiagnostics() {
 
 let statusBar: vscode.StatusBarItem
 let diagnosticCollection: vscode.DiagnosticCollection | undefined
+let changesView: ChangesViewProvider | undefined
+let commentsView: CommentsViewProvider | undefined
+let progress: ReviewProgress | undefined
 
 function refresh() {
   const n = threadsByRef.size
   const open = openThreads().length
+  commentsView?.refresh()
+  // The Changes rows carry each file's open-comment count, so they move with the
+  // threads. Debounced, because re-listing re-reads every changed file.
+  scheduleChangesRefresh()
   if (n > 0) {
     statusBar.text = `$(comment-discussion) ${open} open · ${n - open} resolved`
     statusBar.show()
@@ -107,7 +98,6 @@ function refresh() {
 }
 
 const REFRESH_DEBOUNCE_MS = 250
-let pendingRefresh: NodeJS.Timeout | undefined
 
 /**
  * Coalesce the re-render that follows a document edit.
@@ -119,21 +109,14 @@ let pendingRefresh: NodeJS.Timeout | undefined
  * path. Discrete user actions (add, reply, resolve, delete) still refresh
  * immediately; only typing is debounced.
  */
-function scheduleRefresh() {
-  if (pendingRefresh) clearTimeout(pendingRefresh)
-  pendingRefresh = setTimeout(() => {
-    pendingRefresh = undefined
-    refresh()
-    saveState()
-  }, REFRESH_DEBOUNCE_MS)
-}
-
-function flushPendingRefresh() {
-  if (!pendingRefresh) return
-  clearTimeout(pendingRefresh)
-  pendingRefresh = undefined
+const scheduleRefresh = debounce(() => {
   refresh()
   saveState()
+}, REFRESH_DEBOUNCE_MS)
+
+/** Run a coalesced refresh now, or do nothing if none is waiting. */
+function flushPendingRefresh() {
+  scheduleRefresh.flush()
 }
 
 // --------------- AI Provider ---------------
@@ -264,23 +247,24 @@ function setupBranchWatcher(context: vscode.ExtensionContext, controller: vscode
       outputLog.appendLine('[Crit] Git API not available — branch scoping disabled')
       return
     }
-    for (const repo of git.repositories) {
-      repo.state.onDidChange(() => {
-        const newKey = getBranchKey()
-        if (newKey !== currentBranchKey) {
-          switchToBranch(controller, newKey)
-        }
-      })
+
+    // Registered on `context.subscriptions`, including the ones added later for
+    // repositories opened mid-session: a listener that outlives the extension
+    // host keeps firing `switchToBranch` against threads that have been
+    // disposed.
+    const watchRepo = (repo: Repository) => {
+      context.subscriptions.push(
+        repo.state.onDidChange(() => {
+          const newKey = getBranchKey()
+          if (newKey !== currentBranchKey) {
+            switchToBranch(controller, newKey)
+          }
+        }),
+      )
     }
-    // Also watch for new repos being opened
-    git.onDidOpenRepository((repo: any) => {
-      repo.state.onDidChange(() => {
-        const newKey = getBranchKey()
-        if (newKey !== currentBranchKey) {
-          switchToBranch(controller, newKey)
-        }
-      })
-    })
+
+    for (const repo of git.repositories) watchRepo(repo)
+    context.subscriptions.push(git.onDidOpenRepository(watchRepo))
     outputLog.appendLine(`[Crit] Branch watcher active, current: ${currentBranchKey}`)
   } catch (e: any) {
     outputLog.appendLine(`[Crit] Branch watcher setup failed: ${e.message}`)
@@ -303,7 +287,7 @@ function setupLineTracking(context: vscode.ExtensionContext) {
       if (affected.length === 0) return
 
       // Process content changes in reverse order (bottom-up) to avoid cascading shifts
-      const changes = [...e.contentChanges].sort((a, b) => b.range.start.line - a.range.start.line)
+      const changes = orderBy(e.contentChanges, [(change) => change.range.start.line], ['desc'])
 
       for (const change of changes) {
         const startLine = change.range.start.line
@@ -335,6 +319,180 @@ function setupLineTracking(context: vscode.ExtensionContext) {
   // Deactivation must not drop an edit that is still inside the debounce
   // window.
   context.subscriptions.push({ dispose: flushPendingRefresh })
+}
+
+// --------------- Sidebar Views ---------------
+
+const CHANGES_DEBOUNCE_MS = 200
+
+/**
+ * Re-list the changed files, coalescing the burst of notifications a single
+ * save produces — the Git extension fires `onDidChange` several times per write,
+ * and each refresh re-reads and re-hashes every changed file.
+ */
+const scheduleChangesRefresh = debounce(() => changesView?.refresh(), CHANGES_DEBOUNCE_MS)
+
+function setupViews(context: vscode.ExtensionContext) {
+  progress = createReviewProgress(context, outputLog)
+  context.subscriptions.push(progress)
+  context.subscriptions.push(registerSnapshotProvider(snapshotDirFor(context)))
+
+  const changes = new ChangesViewProvider(progress.reviewed, context.workspaceState)
+  const comments = new CommentsViewProvider()
+  changesView = changes
+  commentsView = comments
+  context.subscriptions.push(changes, comments)
+
+  const changesTree = vscode.window.createTreeView('crit.changes', {
+    treeDataProvider: changes,
+    manageCheckboxStateManually: true,
+  })
+  changes.attach(changesTree)
+  context.subscriptions.push(changesTree)
+
+  const commentsTree = vscode.window.createTreeView('crit.comments', { treeDataProvider: comments })
+  comments.attach(commentsTree)
+  context.subscriptions.push(commentsTree)
+
+  // The checkbox is the primary way in and out of a mark; the context-menu
+  // commands go through the same two calls. Ticking a folder acts on every file
+  // beneath it.
+  context.subscriptions.push(
+    changesTree.onDidChangeCheckboxState(async (event) => {
+      for (const [node, state] of event.items) {
+        if (changes.checkboxIntent(node, state) === 'mark') await markReviewed(node)
+        else unmarkReviewed(node)
+      }
+    }),
+  )
+
+  // A mark's freshness is a function of file content, so anything that can
+  // change content has to re-list: git's own notifications (which cover an
+  // agent writing a file nobody has open), plus saves and unsaved edits.
+  context.subscriptions.push(onChangedFilesChanged(scheduleChangesRefresh))
+  context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(scheduleChangesRefresh))
+  context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(scheduleChangesRefresh))
+  context.subscriptions.push(progress.onDidChange(scheduleChangesRefresh))
+  // The tree layout follows `scm.compactFolders`, which nothing else would
+  // redraw — the changed files have not moved, only how they are grouped.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('scm.compactFolders')) changes.refresh()
+    }),
+  )
+  context.subscriptions.push({ dispose: () => scheduleChangesRefresh.cancel() })
+}
+
+async function markReviewed(node: ChangesNode) {
+  if (!progress || !changesView) return
+  const failed: string[] = []
+  for (const file of changesView.filesOf(node)) {
+    // Re-marking an already-fresh file would only rewrite the same hash.
+    if (file.state === 'reviewed') continue
+    if (!(await progress.reviewed.mark(file.file.uri))) failed.push(file.file.relativePath)
+  }
+  if (failed.length > 0) {
+    vscode.window.showWarningMessage(`Could not mark ${failed.join(', ')} as reviewed — the content is unreadable.`)
+  }
+  changesView.refresh()
+}
+
+function unmarkReviewed(node: ChangesNode) {
+  if (!progress || !changesView) return
+  for (const file of changesView.filesOf(node)) progress.reviewed.unmark(file.file.uri)
+  changesView.refresh()
+}
+
+/**
+ * The diff a stale mark exists to make possible: the file as it was when it was
+ * marked reviewed, against the file now. Deliberately narrower than the HEAD
+ * diff — it shows only what arrived after the reviewer looked away.
+ */
+async function showChangesSinceReviewed(node: FileChangeNode) {
+  const entry = progress?.reviewed.entry(node.file.uri)
+  if (!entry) {
+    vscode.window.showInformationMessage(`${node.file.relativePath} has not been marked reviewed.`)
+    return
+  }
+  if (!entry.hash) {
+    // A `stat`-tier mark: too large to copy, or not text. Tracking it still
+    // works — there is simply no baseline to put on the left of a diff.
+    vscode.window.showInformationMessage(
+      `${node.file.relativePath} is tracked by size and timestamp, so there is no reviewed-at copy to compare against.`,
+    )
+    return
+  }
+  await vscode.commands.executeCommand(
+    'vscode.diff',
+    snapshotUri(node.file.uri, entry.hash),
+    node.file.uri,
+    `${path.basename(node.file.relativePath)} — since you reviewed`,
+  )
+}
+
+async function openChange(node: ChangesNode) {
+  if (node.kind === 'folder') return
+  // An added or untracked file has no HEAD side, so a diff against nothing
+  // would just be the file with every line marked new.
+  const left = isUntracked(node.file) ? undefined : headUri(node.file.uri)
+  if (!left) {
+    await vscode.window.showTextDocument(node.file.uri)
+    return
+  }
+  await vscode.commands.executeCommand(
+    'vscode.diff',
+    left,
+    node.file.uri,
+    `${path.basename(node.file.relativePath)} — working tree ↔ HEAD`,
+  )
+}
+
+async function revealThread(thread: TrackedCommentThread) {
+  const doc = await vscode.workspace.openTextDocument(thread.uri)
+  const editor = await vscode.window.showTextDocument(doc)
+  const pos = thread.range.start
+  editor.selection = new vscode.Selection(pos, pos)
+  editor.revealRange(thread.range, vscode.TextEditorRevealType.InCenter)
+  thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded
+}
+
+/**
+ * Narrow the Comments section by comment text or filename.
+ *
+ * A tree view cannot host a filter box of its own — the built-in Comments view's
+ * one comes from an internal `FilterViewPane` — so this is an input box that
+ * filters as you type, the way the old quick-pick's search did. Dismissing it
+ * keeps the filter; the title bar then offers to clear it.
+ */
+function filterComments() {
+  const view = commentsView
+  if (!view) return
+
+  const input = vscode.window.createInputBox()
+  input.title = 'Filter Review Comments'
+  input.placeholder = 'Comment text or file name'
+  input.value = view.currentFilter()
+  input.onDidChangeValue((value) => view.setFilter(value))
+  input.onDidAccept(() => input.hide())
+  input.onDidHide(() => input.dispose())
+  input.show()
+}
+
+/**
+ * A tree menu hands the command its node, while the gutter and the QuickPick
+ * hand over the thread itself. Both arrive here.
+ */
+function asThread(arg: unknown): TrackedCommentThread | undefined {
+  const candidate = arg as { kind?: string; thread?: TrackedCommentThread } | undefined
+  const thread = candidate?.kind === 'thread' ? candidate.thread : (arg as TrackedCommentThread | undefined)
+  return thread && findThreadByRef(thread.threadRef) ? thread : undefined
+}
+
+/** Same for the file-level batch commands, which are addressed by relative path. */
+function asFileKey(arg: unknown): string | undefined {
+  if (typeof arg === 'string') return arg
+  const node = arg as { kind?: string; relativePath?: string } | undefined
+  return node?.kind === 'file' ? node.relativePath : undefined
 }
 
 // --------------- Activation ---------------
@@ -378,8 +536,9 @@ export function activate(context: vscode.ExtensionContext) {
 
   // --- Status bar (MUST be created before loadState/refresh) ---
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50)
-  statusBar.command = 'crit.showPanel'
-  statusBar.tooltip = 'Click to view review comments'
+  // Reveals the sidebar, which is now the only place comments are listed.
+  statusBar.command = 'crit.comments.focus'
+  statusBar.tooltip = 'Click to show review comments'
   context.subscriptions.push(statusBar)
 
   // --- Detect current branch and load state ---
@@ -399,6 +558,9 @@ export function activate(context: vscode.ExtensionContext) {
 
   // --- Branch watcher ---
   setupBranchWatcher(context, controller)
+
+  // --- Sidebar: changed files and their review marks, plus the comment tree ---
+  setupViews(context)
 
   try {
     const staged = stageServer(context)
@@ -426,6 +588,9 @@ export function activate(context: vscode.ExtensionContext) {
       trackThread(thread)
       refresh()
       saveState()
+      // Not awaited: the comment is saved, and the offer is about the editor's
+      // own view stealing the sidebar — which has just happened, right here.
+      void promptIfCommentsViewReveals(context, outputLog)
     }),
   )
 
@@ -481,15 +646,16 @@ export function activate(context: vscode.ExtensionContext) {
 
   // --- Send single thread to configured AI provider ---
   context.subscriptions.push(
-    vscode.commands.registerCommand('crit.sendThread', async (thread: vscode.CommentThread) => {
-      await sendThreadsToAi([requireTrackedThread(thread)])
+    vscode.commands.registerCommand('crit.sendThread', async (arg: unknown) => {
+      const thread = asThread(arg) ?? requireTrackedThread(arg as vscode.CommentThread)
+      await sendThreadsToAi([thread])
     }),
   )
 
   // --- Resolve thread ---
   context.subscriptions.push(
-    vscode.commands.registerCommand('crit.resolve', (thread: vscode.CommentThread) => {
-      resolveThread(thread)
+    vscode.commands.registerCommand('crit.resolve', (arg: unknown) => {
+      resolveThread(asThread(arg) ?? (arg as vscode.CommentThread))
       refresh()
       saveState()
     }),
@@ -497,15 +663,12 @@ export function activate(context: vscode.ExtensionContext) {
 
   // --- Unresolve thread ---
   context.subscriptions.push(
-    vscode.commands.registerCommand('crit.unresolve', (thread: vscode.CommentThread) => {
-      unresolveThread(thread)
+    vscode.commands.registerCommand('crit.unresolve', (arg: unknown) => {
+      unresolveThread(asThread(arg) ?? (arg as vscode.CommentThread))
       refresh()
       saveState()
     }),
   )
-
-  // --- Show comment panel ---
-  context.subscriptions.push(vscode.commands.registerCommand('crit.showPanel', () => showCommentPanel()))
 
   // --- Submit all open to configured AI provider ---
   context.subscriptions.push(vscode.commands.registerCommand('crit.submitAll', () => submitAll()))
@@ -564,7 +727,9 @@ export function activate(context: vscode.ExtensionContext) {
 
   // --- File-level batch: submit file ---
   context.subscriptions.push(
-    vscode.commands.registerCommand('crit.submitFile', async (fileKey: string) => {
+    vscode.commands.registerCommand('crit.submitFile', async (arg: unknown) => {
+      const fileKey = asFileKey(arg)
+      if (fileKey === undefined) return
       const open = openThreadsInFile(fileKey)
       if (!open) return
       if (open.length === 0) {
@@ -577,7 +742,9 @@ export function activate(context: vscode.ExtensionContext) {
 
   // --- File-level batch: resolve file ---
   context.subscriptions.push(
-    vscode.commands.registerCommand('crit.resolveFile', (fileKey: string) => {
+    vscode.commands.registerCommand('crit.resolveFile', (arg: unknown) => {
+      const fileKey = asFileKey(arg)
+      if (fileKey === undefined) return
       const open = openThreadsInFile(fileKey)
       if (!open) return
       for (const thread of open) resolveThread(thread)
@@ -593,7 +760,9 @@ export function activate(context: vscode.ExtensionContext) {
 
   // --- File-level batch: delete resolved in file ---
   context.subscriptions.push(
-    vscode.commands.registerCommand('crit.deleteResolvedFile', async (fileKey: string) => {
+    vscode.commands.registerCommand('crit.deleteResolvedFile', async (arg: unknown) => {
+      const fileKey = asFileKey(arg)
+      if (fileKey === undefined) return
       const threads = getThreadsByFile().get(fileKey)
       if (!threads) return
       const resolved = threads.filter(isResolved)
@@ -618,8 +787,9 @@ export function activate(context: vscode.ExtensionContext) {
 
   // --- Copy single thread to clipboard ---
   context.subscriptions.push(
-    vscode.commands.registerCommand('crit.copyThread', async (thread: vscode.CommentThread) => {
-      const prompt = await buildPrompt([requireTrackedThread(thread)])
+    vscode.commands.registerCommand('crit.copyThread', async (arg: unknown) => {
+      const thread = asThread(arg) ?? requireTrackedThread(arg as vscode.CommentThread)
+      const prompt = await buildPrompt([thread])
       await vscode.env.clipboard.writeText(prompt)
       vscode.window.showInformationMessage('Comment prompt copied to clipboard.')
     }),
@@ -641,7 +811,9 @@ export function activate(context: vscode.ExtensionContext) {
 
   // --- Copy file comments to clipboard ---
   context.subscriptions.push(
-    vscode.commands.registerCommand('crit.copyFile', async (fileKey: string) => {
+    vscode.commands.registerCommand('crit.copyFile', async (arg: unknown) => {
+      const fileKey = asFileKey(arg)
+      if (fileKey === undefined) return
       const open = openThreadsInFile(fileKey)
       if (!open) return
       if (open.length === 0) {
@@ -676,6 +848,50 @@ export function activate(context: vscode.ExtensionContext) {
   // --- Install the MCP server into Claude Code's user config ---
   context.subscriptions.push(
     vscode.commands.registerCommand('crit.installMcpServer', () => installMcpServer(context, outputLog)),
+  )
+
+  // --- Changes section: open, mark, and the since-I-reviewed diff ---
+  context.subscriptions.push(
+    vscode.commands.registerCommand('crit.openChange', (node: ChangesNode) => openChange(node)),
+    vscode.commands.registerCommand('crit.markReviewed', (node: ChangesNode) => markReviewed(node)),
+    vscode.commands.registerCommand('crit.unmarkReviewed', (node: ChangesNode) => unmarkReviewed(node)),
+    vscode.commands.registerCommand('crit.showChangesSinceReviewed', (node: FileChangeNode) =>
+      showChangesSinceReviewed(node),
+    ),
+    vscode.commands.registerCommand('crit.refreshChanges', () => changesView?.refresh()),
+    vscode.commands.registerCommand('crit.changesAsTree', () => changesView?.setTreeLayout(true)),
+    vscode.commands.registerCommand('crit.changesAsList', () => changesView?.setTreeLayout(false)),
+    vscode.commands.registerCommand('crit.markAllReviewed', async () => {
+      const rows = changesView?.currentRows() ?? []
+      for (const row of rows) {
+        if (row.state !== 'reviewed') await markReviewed(row)
+      }
+    }),
+    vscode.commands.registerCommand('crit.clearReviewed', () => {
+      for (const row of changesView?.currentRows() ?? []) unmarkReviewed(row)
+    }),
+  )
+
+  // --- Comments section ---
+  context.subscriptions.push(
+    vscode.commands.registerCommand('crit.goToThread', async (arg: unknown) => {
+      const thread = asThread(arg)
+      if (thread) await revealThread(thread)
+    }),
+    vscode.commands.registerCommand('crit.deleteThread', async (arg: unknown) => {
+      const thread = asThread(arg)
+      if (!thread) return
+      const answer = await vscode.window.showWarningMessage('Delete this comment thread?', { modal: true }, 'Delete')
+      if (answer !== 'Delete') return
+      untrackThread(thread)
+      thread.dispose()
+      refresh()
+      saveState()
+    }),
+    vscode.commands.registerCommand('crit.hideResolvedComments', () => commentsView?.setHideResolved(true)),
+    vscode.commands.registerCommand('crit.showResolvedComments', () => commentsView?.setHideResolved(false)),
+    vscode.commands.registerCommand('crit.filterComments', () => filterComments()),
+    vscode.commands.registerCommand('crit.clearCommentsFilter', () => commentsView?.setFilter('')),
   )
 
   // --- Register Copilot tools ---
@@ -716,238 +932,6 @@ function setCommentMode(commentId: number, mode: vscode.CommentMode): boolean {
     return c
   })
   return true
-}
-
-// --------------- Interactive QuickPick Panel ---------------
-
-async function showCommentPanel() {
-  interface ActionItem extends vscode.QuickPickItem {
-    action?: string
-    threadRef?: string
-    fileKey?: string
-  }
-
-  const qp = vscode.window.createQuickPick<ActionItem>()
-  const openCount = openThreads().length
-  const resolvedCount = threadsByRef.size - openCount
-  qp.title =
-    threadsByRef.size === 0
-      ? 'Review Comments (none yet)'
-      : `Review Comments (${openCount} open, ${resolvedCount} resolved)`
-  qp.placeholder = 'Type to search comments… Select an action or comment.'
-  qp.matchOnDescription = true
-
-  function buildItems(filter: string): ActionItem[] {
-    const items: ActionItem[] = []
-    const lf = filter.toLowerCase()
-
-    // Asking for a review is the one action that makes sense with no
-    // comments on screen, so it leads and the panel stays open when empty.
-    items.push(
-      {
-        label: '$(sparkle) Ask AI to Review Changes',
-        description: 'AI leaves inline comments',
-        action: 'requestReview',
-      },
-      { label: '$(sparkle) Ask AI to Review This File', description: 'Active editor', action: 'requestReviewFile' },
-    )
-
-    if (threadsByRef.size === 0) return items
-
-    items.push({ label: '', kind: vscode.QuickPickItemKind.Separator })
-
-    // Global actions (always shown)
-    items.push(
-      { label: '$(send) Send All Open to AI', description: `${openCount} open`, action: 'submitAll' },
-      { label: '$(clippy) Copy All Open to Clipboard', description: `${openCount} open`, action: 'copyAll' },
-      { label: '$(check-all) Resolve All', description: `${openCount} open`, action: 'resolveAll' },
-      { label: '$(trash) Delete All Resolved', description: `${resolvedCount} resolved`, action: 'deleteResolved' },
-      { label: '$(clear-all) Clear All', description: `${threadsByRef.size} total`, action: 'clearAll' },
-      { label: '', kind: vscode.QuickPickItemKind.Separator },
-    )
-
-    const byFile = getThreadsByFile()
-
-    for (const [file, fileThreads] of byFile) {
-      const sorted = fileThreads.sort((a, b) => a.range.start.line - b.range.start.line)
-
-      // Filter: check if any comment in this file matches
-      const matching = lf
-        ? sorted.filter((thread) => {
-            const texts = thread.comments
-              .map((c) => (typeof c.body === 'string' ? c.body : c.body.value))
-              .join(' ')
-              .toLowerCase()
-            return file.toLowerCase().includes(lf) || texts.includes(lf)
-          })
-        : sorted
-
-      if (matching.length === 0) continue
-
-      const fileOpen = matching.filter((thread) => !isResolved(thread)).length
-      const fileResolved = matching.length - fileOpen
-
-      // File header with batch actions
-      items.push({
-        label: `📁 ${file}  (${fileOpen} open, ${fileResolved} resolved)`,
-        kind: vscode.QuickPickItemKind.Separator,
-      })
-      items.push(
-        { label: `  $(send) Send ${file} to AI`, description: `${fileOpen} open`, action: 'submitFile', fileKey: file },
-        { label: `  $(clippy) Copy ${file}`, description: `${fileOpen} open`, action: 'copyFile', fileKey: file },
-        {
-          label: `  $(check-all) Resolve ${file}`,
-          description: `${fileOpen} open`,
-          action: 'resolveFile',
-          fileKey: file,
-        },
-        {
-          label: `  $(trash) Delete Resolved in ${file}`,
-          description: `${fileResolved} resolved`,
-          action: 'deleteResolvedFile',
-          fileKey: file,
-        },
-      )
-
-      // Individual comments
-      for (const thread of matching) {
-        const line = thread.range.start.line + 1
-        const preview = threadPreview(thread)
-        const status = isResolved(thread) ? '✅' : '💬'
-        const replyCount = thread.comments.length - 1
-        const replyInfo = replyCount > 0 ? `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}` : ''
-        const roles = thread.comments.map((c) => ((c as ReviewComment).role === 'agent' ? '🤖' : '👤')).join('')
-        items.push({
-          label: `    ${status} L${line}: ${preview}`,
-          description: `${roles}${replyInfo ? '  ' + replyInfo : ''}`,
-          threadRef: thread.threadRef,
-          action: 'commentAction',
-        })
-      }
-    }
-
-    return items
-  }
-
-  qp.items = buildItems('')
-  qp.onDidChangeValue((value) => {
-    qp.items = buildItems(value)
-  })
-
-  qp.onDidAccept(async () => {
-    const pick = qp.selectedItems[0]
-    if (!pick?.action) return
-    qp.hide()
-
-    switch (pick.action) {
-      case 'requestReview':
-        await vscode.commands.executeCommand('crit.requestReview')
-        break
-      case 'requestReviewFile':
-        await vscode.commands.executeCommand('crit.requestReviewFile')
-        break
-      case 'submitAll':
-        await vscode.commands.executeCommand('crit.submitAll')
-        break
-      case 'copyAll':
-        await vscode.commands.executeCommand('crit.copyAll')
-        break
-      case 'resolveAll':
-        await vscode.commands.executeCommand('crit.resolveAll')
-        break
-      case 'deleteResolved':
-        await vscode.commands.executeCommand('crit.deleteResolved')
-        break
-      case 'clearAll':
-        await vscode.commands.executeCommand('crit.clearAll')
-        break
-      case 'submitFile':
-        if (pick.fileKey) await vscode.commands.executeCommand('crit.submitFile', pick.fileKey)
-        break
-      case 'copyFile':
-        if (pick.fileKey) await vscode.commands.executeCommand('crit.copyFile', pick.fileKey)
-        break
-      case 'resolveFile':
-        if (pick.fileKey) await vscode.commands.executeCommand('crit.resolveFile', pick.fileKey)
-        break
-      case 'deleteResolvedFile':
-        if (pick.fileKey) await vscode.commands.executeCommand('crit.deleteResolvedFile', pick.fileKey)
-        break
-      case 'commentAction':
-        if (pick.threadRef !== undefined) await showCommentActions(pick.threadRef)
-        break
-    }
-  })
-
-  qp.show()
-}
-
-// --------------- Per-Comment Action Submenu ---------------
-
-async function showCommentActions(threadRef: string) {
-  const thread = findThreadByRef(threadRef)
-  if (!thread) return
-
-  const rel = vscode.workspace.asRelativePath(thread.uri)
-  const line = thread.range.start.line + 1
-  const preview = threadPreview(thread)
-  const resolved = isResolved(thread)
-
-  interface ActionItem extends vscode.QuickPickItem {
-    action: string
-  }
-
-  const items: ActionItem[] = [
-    { label: '$(eye) Go to Comment', description: `${rel}:${line}`, action: 'goto' },
-    { label: '$(send) Send to AI', description: 'Send this comment to the configured AI provider', action: 'send' },
-    { label: '$(clippy) Copy to Clipboard', description: 'Copy this comment as a prompt', action: 'copy' },
-    { label: resolved ? '$(debug-restart) Reopen' : '$(check) Resolve', action: resolved ? 'unresolve' : 'resolve' },
-    { label: '$(trash) Delete', action: 'delete' },
-  ]
-
-  const pick = await vscode.window.showQuickPick(items, {
-    title: `${resolved ? '✅' : '💬'} L${line}: ${preview}`,
-    placeHolder: 'Choose an action',
-  })
-
-  if (!pick) return
-
-  switch (pick.action) {
-    case 'goto': {
-      const doc = await vscode.workspace.openTextDocument(thread.uri)
-      const editor = await vscode.window.showTextDocument(doc)
-      const pos = thread.range.start
-      editor.selection = new vscode.Selection(pos, pos)
-      editor.revealRange(thread.range, vscode.TextEditorRevealType.InCenter)
-      thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded
-      break
-    }
-    case 'send':
-      await vscode.commands.executeCommand('crit.sendThread', thread)
-      break
-    case 'copy':
-      await vscode.commands.executeCommand('crit.copyThread', thread)
-      break
-    case 'resolve':
-      resolveThread(thread)
-      refresh()
-      saveState()
-      break
-    case 'unresolve':
-      unresolveThread(thread)
-      refresh()
-      saveState()
-      break
-    case 'delete': {
-      const answer = await vscode.window.showWarningMessage('Delete this comment thread?', { modal: true }, 'Delete')
-      if (answer !== 'Delete') break
-      untrackThread(thread)
-      thread.dispose()
-      refresh()
-      saveState()
-      break
-    }
-  }
 }
 
 // --------------- Submit All ---------------

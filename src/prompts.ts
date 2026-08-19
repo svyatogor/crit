@@ -1,3 +1,4 @@
+import { sortBy } from 'es-toolkit'
 import * as vscode from 'vscode'
 import { type ClaudeDelivery } from './claude-delivery'
 import { findRelevantHunk, getFileDiffHunks } from './git'
@@ -100,12 +101,7 @@ export async function buildPrompt(
   targetThreads: TrackedCommentThread[],
   includeDiagnosticCodes = false,
 ): Promise<string> {
-  const byFile = new Map<string, TrackedCommentThread[]>()
-  for (const thread of targetThreads) {
-    const key = thread.uri.toString()
-    if (!byFile.has(key)) byFile.set(key, [])
-    byFile.get(key)!.push(thread)
-  }
+  const byFile = Map.groupBy(targetThreads, (thread) => thread.uri.toString())
 
   const parts: string[] = []
   parts.push(render(reviewIntro) + '\n')
@@ -121,7 +117,7 @@ export async function buildPrompt(
     // Get diff hunks for this file (once per file)
     const hunks = await getFileDiffHunks(uri)
 
-    const sorted = [...fileThreads].sort((a, b) => a.range.start.line - b.range.start.line)
+    const sorted = sortBy(fileThreads, [(thread) => thread.range.start.line])
 
     for (const thread of sorted) {
       const line = thread.range.start.line + 1

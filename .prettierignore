@@ -4,6 +4,7 @@ out/
 *.vsix
 package-lock.json
 CHANGELOG.md
+src/vscode-git.d.ts
 
 # Prompt payloads sent verbatim to the agent — reflowing them changes the prompt.
 src/prompts/*.md

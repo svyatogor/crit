@@ -14,13 +14,13 @@ Add review comments on any line in any file, then submit them all to Copilot, Cl
 
 Open any file → hover on the line gutter → click the **`+`** icon → type your feedback (e.g., "rename this variable", "add error handling") → click **Add Comment**.
 
-### 2. Review & Manage
+### 2. Work Through the Change
 
-Click the **status bar** (`💬 2 open · 1 resolved`) to open the **comment panel** — search, filter, batch-resolve, or navigate to any comment.
+Open the **Crit** sidebar — the status bar (`💬 2 open · 1 resolved`) reveals it. **Changes** lists every file that differs from HEAD — tick each one off as you read it, and see at a glance when an agent has touched one you had already finished. **Comments** lists every thread you have left, grouped by file.
 
 ### 3. Submit to AI
 
-- **Send to AI** — click the 📤 button on any thread or use the comment panel to send all open comments to your configured provider
+- **Send to AI** — click the 📤 button on any thread, or **Send All to AI** in the Comments section's title bar
 - **Copy to Clipboard** — click 📋 to copy the structured prompt, then paste into Claude Code, Codex, or any AI chat
 - **MCP Server** — Claude Code connects directly via MCP for real-time comment interaction
 
@@ -33,6 +33,28 @@ The default provider is **GitHub Copilot**. To use **Claude Code**, set **Crit: 
 ---
 
 ## Features
+
+### The Crit Sidebar
+
+A **Crit** icon in the activity bar holds the two things a review needs at once.
+
+**Changes** lists every file that differs from HEAD — the same working-tree changes the Source Control view shows, including files an agent just created. Each row has a checkbox: tick it when you have read the file. The header keeps the count (`4/9 reviewed`) and switches between a **flat list** and a **folder tree**, collapsing single-child folder chains the way the Source Control view does. Tick a folder to tick everything beneath it.
+
+A row also carries `💬 2` when the file has open review comments, so the two sections line up: the file you still owe an answer on is marked in the list you are working down. Folder rows total their descendants' counts. Resolved threads stop marking a file, since the point of the marker is what is left to deal with.
+
+**Comments** lists every review thread grouped by file, with the line and the `R3` label each thread is known by elsewhere. Send, resolve, or delete a thread inline; resolved threads stay listed but muted, and the header has a toggle to hide them.
+
+### Reviewed Marks That Go Stale, Not Missing
+
+A mark records the **content** the file had when you ticked it, not the time you ticked it. So when an agent edits a file you had already read, the mark does not silently vanish — it becomes **stale**: the tick stays, the row's icon becomes a dot in the theme's modified colour (the same thing an editor's dirty dot says — nothing is wrong, the file just moved on), and the description reads `changed since you reviewed`. You _did_ read that file, and clearing the tick would deny it.
+
+That retained mark is the point: **Show Changes Since I Reviewed** opens a diff of the file as you last saw it against the file now, so a one-line fix in a 900-line file costs you one line of re-reading rather than the whole file.
+
+Clicking a stale row's checkbox **re-reviews** it — one click, back to fresh at the new content. VS Code offers to clear the tick, since the box is ticked, but on a row saying `changed since you reviewed` a click means "I have looked again", not "forget that I read this"; taking it literally cost two clicks and discarded the snapshot in between. Clearing a mark on purpose is the context menu's **Mark as Not Reviewed**, where it can be named. The same rule applies to a folder row holding anything stale.
+
+Because freshness is content-derived, it behaves the way you would expect without any bookkeeping: a formatter run or a `touch` that leaves the bytes alone does _not_ invalidate a mark, and an agent writing to a file nobody has open _does_.
+
+Marks are scoped per **repository and branch**, like comments — park a review, take a hotfix branch, come back to your progress intact. A new branch inherits the marks you had, and anything that does not belong on it shows up as stale rather than as a false checkmark. Committing a file retires its mark, since it is no longer under review.
 
 ![Inline Comments](examples/screenshot-inline.png)
 
@@ -66,15 +88,24 @@ When you submit comments, the prompt includes the **git diff hunk** for each com
 
 ````
 
-### Comment Panel (Status Bar)
+### Batch Actions and Filtering
 
-![Comment Panel](examples/screenshot-panel.png)
+Everything the old status-bar quick-pick did now lives in the sidebar, where the thread it acts on is visible:
+- **Section title bar** — Send All to AI, Resolve All, Delete Resolved, Clear All, the filter, and the show/hide-resolved toggle
+- **Per-file row** — Send to AI, Copy, Resolve, Delete Resolved, scoped to that file
+- **Per-thread row** — Go to, Send to AI, Copy, Resolve/Reopen, Delete
 
-Click the status bar to open an interactive panel with:
-- **Search/filter** — type to find comments by text or filename
-- **Global batch actions** — Send All to AI, Copy All, Resolve All, Delete Resolved, Clear All
-- **Per-file batch actions** — Send to AI, Copy, Resolve, Delete Resolved scoped to a single file
-- **Per-comment actions** — Go to, Send to AI, Copy, Resolve, Delete
+The status bar itself now just reveals the Comments section.
+
+**Filter** narrows the section as you type, by comment text or by file name — a file name matches the whole file, since asking for `parser.ts` is asking for that file rather than for comments quoting it. The header switches to `2 of 7 matching "error"` while a filter is active, so nothing is hidden without being counted, and the title bar's button becomes a clear-filter button.
+
+### The Built-in Comments View
+
+Because Crit registers a comment controller, its threads also appear in VS Code's own Comments view — that view collects threads from every extension, and there is no way to opt out of feeding it.
+
+VS Code reveals that view whenever a thread gains a comment, which takes the sidebar away from Crit's. The `comments.openView` setting governs this, and at its default `firstFile` the reveal is gated only on whether that view currently has a rendered tree — a far weaker gate than "once", since it comes back after the view is hidden or the window reloads. So the first time you write a comment, Crit offers to set `comments.openView` to `never`, with a **Don't Show Again**. Nothing is written to your settings unless you accept; because that setting is global rather than per-extension, accepting also stops other comment providers revealing that view.
+
+Crit cannot fix this from the inside. Nothing on `CommentController` or `CommentThread` suppresses the reveal, and the one contribution point that reaches that view's rows — `commentsView/commentThread/context` — is proposed API, unusable in a published extension. Its container is created at runtime rather than declared in a manifest, and `contributes.views` resolves only a fixed set of built-in container ids, so Crit's own views cannot be placed beside it either. Hence the separate sidebar.
 
 ### Comment Persistence
 - Comments **survive window reloads** via VS Code workspace state
@@ -91,7 +122,7 @@ The reverse of every other Crit flow: instead of you commenting and the AI answe
 
 - **`Crit: Ask AI to Review Changes`** — the uncommitted changes in the workspace
 - **`Crit: Ask AI to Review This File`** — the file in the active editor
-- Both also appear at the top of the comment panel, which now opens even with no comments in it
+- Both also appear in the Changes section's title bar, which is there even with nothing changed yet
 - In a git workspace, a **sparkle** button sits in the Source Control view's title bar for the whole diff, and on hover over any changed file for that one file
 
 The agent runs its own `code-review` skill and posts each finding through `addDiffComment`, so the findings arrive as ordinary Crit threads: they show up in the gutter and the Problems view, you can reply to them, resolve them, or send them straight back with **Send to AI** to have the finding fixed. Nothing is edited on your behalf — a review request explicitly asks for comments, not changes.
@@ -232,8 +263,8 @@ Run with: `node mcp-server.js` (stdio transport, no arguments needed).
 Every action that sends to AI also has a **Copy to Clipboard** variant — paste the structured prompt into Claude Code, Codex CLI, ChatGPT, or any AI:
 
 - **Per-thread**: 📋 button on the thread title bar
-- **Per-file**: Copy action in the comment panel
-- **Global**: "Crit: Copy All to Clipboard" in the command palette
+- **Per-file**: Copy action on a file row in the Comments section
+- **Global**: 📋 button in the Comments section header, or "Crit: Copy All to Clipboard" in the command palette
 
 ---
 
@@ -243,12 +274,15 @@ Every action that sends to AI also has a **Copy to Clipboard** variant — paste
 | ---------------------------------- | -------------------------------------------------------------------- |
 | `Crit: Ask AI to Review Changes`   | Have the AI review the uncommitted changes and leave inline comments |
 | `Crit: Ask AI to Review This File` | Have the AI review the active file and leave inline comments         |
-| `Crit: Show Comments Panel`        | Open the interactive comment panel                                   |
 | `Crit: Send All to AI`             | Send all open comments to the configured AI provider                 |
 | `Crit: Copy All to Clipboard`      | Copy all open comments as a structured prompt                        |
 | `Crit: Resolve All`                | Resolve all open comments                                            |
 | `Crit: Delete All Resolved`        | Delete all resolved comments                                         |
 | `Crit: Clear All Comments`         | Delete all comments                                                  |
+| `Crit: Mark All Files Reviewed`    | Tick every file in the Changes section                               |
+| `Crit: Clear All Reviewed Marks`   | Untick every file in the Changes section                             |
+| `Crit: Filter Comments`            | Narrow the Comments section by comment text or file name             |
+| `Crit: Clear Comment Filter`       | Drop the active comment filter                                       |
 
 ---
 
@@ -261,6 +295,14 @@ src/
   review-threads.ts      — The review model: threads, the refs addressing them, serialization
   comment-targets.ts     — Resolving the file and line an agent names, bounded to the project
   review-request.ts      — Asking the AI to review, and where its findings go
+  reviewed-files.ts      — Which files are read and whether that still holds (no vscode: plain Node)
+  review-progress.ts     — The same model wired to this window: buckets, branches, content reads
+  changes-view.ts        — The Changes section: git's changed files, plus each one's mark
+  comments-view.ts       — The Comments section: threads grouped by file
+  comments-view-reveal.ts — Offers to stop VS Code's own Comments view stealing the sidebar
+  snapshot-content.ts    — Serves the reviewed-at copy of a file, read-only, for the delta diff
+  file-icons.ts          — File-type icons in the trees without picking up file decorations
+  git.ts                 — Repository identity, changed files, diff hunks
   claude-delivery.ts     — Terminal, then cross-session message, then new conversation
   prompts.ts             — Everything the extension says to an agent (templates in prompts/)
   mcp-server.ts          — Standalone MCP server for Claude Code (connects to IPC)
@@ -270,6 +312,14 @@ src/
 **IPC Server**: Every VS Code window starts a local HTTP server on `127.0.0.1` using a random port. It atomically publishes `${TMPDIR}/crit/instances/<sessionRef>.json`. The MCP server parses the code, reads the descriptor named by its `sessionRef`, scopes listing and comment creation by `projectRef`, and addresses mutations by `threadRef`. Closing a window removes only its own descriptor. All comment reads/writes still go through the owning extension instance as the single source of truth.
 
 **Branch Scoping**: Comments are stored under `crit.state.{repoName}.{branchName}` in VS Code's workspace state. Branch switches are detected via the git extension API.
+
+**Reviewed Marks**: Stored under `crit.reviewed.{repoName}-{hash8}.{branchName}`, keyed by absolute path, each entry holding the content's sha256 and the time of the mark. The hash suffix on the repository name disambiguates two checkouts that share a folder name in one multi-root workspace, which a bare name would silently merge. Each repository's HEAD is followed separately, so a branch switch in one leaves the others' marks alone.
+
+The content a mark was taken at is copied to `${storageUri}/snapshots/<sha256>/<filename>` — content-addressed, so the same content marked on two branches costs one blob. It is served back through the read-only `crit-snapshot:` scheme. Collection spans every bucket rather than the active one, since a blob one branch has moved past may be the baseline another branch still needs.
+
+**Tree Row Icons**: rows carry a `resourceUri` re-schemed to `crit-icon:`, keeping the path. `TreeItem.resourceUri` is the only thing that resolves the icon theme's real per-extension icon (with `iconPath` set to `ThemeIcon.File`), but it also opts the row into every registered `FileDecorationProvider` — so a plain `file:` URI had git tinting filenames by working-tree status, which in the Comments section is unrelated to anything the row shows. The icon theme resolves from the path and ignores the scheme; git's decoration provider keys on the whole URI string and its ignore provider skips non-`file` schemes. Re-scheming keeps the icon and drops the colour. In Changes, the status letter leads the description instead, which is more precise than a colour anyway.
+
+Reviewed marks are deliberately _not_ part of `serializeState()`: that structure doubles as the MCP wire format, so folding them in would publish your review progress to every `listDiffComments` call.
 
 ---
 

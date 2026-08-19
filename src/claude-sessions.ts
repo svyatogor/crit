@@ -1,3 +1,4 @@
+import { orderBy } from 'es-toolkit'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -78,7 +79,7 @@ export function listClaudeSessions(options: SessionLookupOptions = {}): ClaudeSe
     sessions.push(session)
   }
 
-  return sessions.sort((a, b) => b.startedAt - a.startedAt)
+  return orderBy(sessions, [(session) => session.startedAt], ['desc'])
 }
 
 /**

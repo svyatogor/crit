@@ -6,7 +6,7 @@ import globals from 'globals'
 export default tseslint.config(
   {
     // Build output, dependencies and generated bundles are never linted.
-    ignores: ['out/**', 'node_modules/**', '*.vsix', '.vscode-test/**'],
+    ignores: ['out/**', 'node_modules/**', '*.vsix', '.vscode-test/**', 'src/vscode-git.d.ts'],
   },
 
   // ---- Extension + MCP server sources (type-aware) ----
