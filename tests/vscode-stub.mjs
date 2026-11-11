@@ -15,16 +15,35 @@ export function setRelativePathRoot(root) {
   relativePathRoot = root
 }
 
-let gitApi
+let gitExtension
 
-/** Stand in for the built-in Git extension, as `getGitApi()` resolves it. */
-export function setGitExtension(api) {
-  gitApi = api
+/**
+ * Stand in for the built-in Git extension, as `getGitApi()` resolves it.
+ *
+ * `active: false` models the extension host starting Crit before Git: the API
+ * is unreachable until something calls `activate()`, which settles once the
+ * returned `finishActivation()` is called.
+ */
+export function setGitExtension(api, { active = true } = {}) {
+  if (!api) {
+    gitExtension = undefined
+    return { finishActivation: () => {} }
+  }
+  const extension = { isActive: active, exports: { getAPI: () => api } }
+  let finishActivation = () => {}
+  const activated = new Promise((resolve) => {
+    finishActivation = () => {
+      extension.isActive = true
+      resolve()
+    }
+  })
+  extension.activate = () => activated
+  gitExtension = extension
+  return { finishActivation }
 }
 
 export const extensions = {
-  getExtension: (id) =>
-    id === 'vscode.git' && gitApi ? { isActive: true, exports: { getAPI: () => gitApi } } : undefined,
+  getExtension: (id) => (id === 'vscode.git' ? gitExtension : undefined),
 }
 
 /**

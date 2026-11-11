@@ -7,8 +7,7 @@ import { promptIfCommentsViewReveals } from './comments-view-reveal'
 import { CommentsViewProvider } from './comments-view'
 import { registerTools } from './copilot-tools'
 import { CRIT_DIAGNOSTIC_SOURCE } from './diagnostic-metadata'
-import { getGitApi, headUri, isUntracked, onChangedFilesChanged } from './git'
-import type { Repository } from './vscode-git'
+import { branchKey, getGitApi, headUri, isUntracked, onChangedFilesChanged, watchBranchKey } from './git'
 import { startIpcServer } from './ipc-server'
 import { installMcpServer, promptIfMcpMissing, stageServer } from './mcp-install'
 import { buildNudgeMessage, buildPrompt } from './prompts'
@@ -170,22 +169,6 @@ let extensionContext: vscode.ExtensionContext
 let currentBranchKey: string = '_default'
 let outputLog: vscode.OutputChannel
 
-function getBranchKey(): string {
-  try {
-    const git = getGitApi()
-    if (!git) return '_default'
-    const repos = git.repositories
-    if (!repos || repos.length === 0) return '_default'
-    // Use first repo (most common case)
-    const repo = repos[0]
-    const repoName = path.basename(repo.rootUri.fsPath)
-    const branch = repo.state?.HEAD?.name || '_detached'
-    return `${repoName}.${branch}`
-  } catch {
-    return '_default'
-  }
-}
-
 function stateKey(branchKey?: string): string {
   return `crit.state.${branchKey ?? currentBranchKey}`
 }
@@ -242,29 +225,15 @@ function switchToBranch(controller: vscode.CommentController, newKey: string) {
 
 function setupBranchWatcher(context: vscode.ExtensionContext, controller: vscode.CommentController) {
   try {
-    const git = getGitApi()
-    if (!git) {
-      outputLog.appendLine('[Crit] Git API not available — branch scoping disabled')
-      return
-    }
-
-    // Registered on `context.subscriptions`, including the ones added later for
-    // repositories opened mid-session: a listener that outlives the extension
-    // host keeps firing `switchToBranch` against threads that have been
-    // disposed.
-    const watchRepo = (repo: Repository) => {
-      context.subscriptions.push(
-        repo.state.onDidChange(() => {
-          const newKey = getBranchKey()
-          if (newKey !== currentBranchKey) {
-            switchToBranch(controller, newKey)
-          }
-        }),
-      )
-    }
-
-    for (const repo of git.repositories) watchRepo(repo)
-    context.subscriptions.push(git.onDidOpenRepository(watchRepo))
+    // Registered on `context.subscriptions`: a listener that outlives the
+    // extension host keeps firing `switchToBranch` against threads that have
+    // been disposed.
+    context.subscriptions.push(
+      watchBranchKey((newKey) => {
+        if (newKey !== currentBranchKey) switchToBranch(controller, newKey)
+      }),
+    )
+    if (!getGitApi()) outputLog.appendLine('[Crit] Git API not ready — branch scoping waits for it to activate')
     outputLog.appendLine(`[Crit] Branch watcher active, current: ${currentBranchKey}`)
   } catch (e: any) {
     outputLog.appendLine(`[Crit] Branch watcher setup failed: ${e.message}`)
@@ -564,7 +533,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(statusBar)
 
   // --- Detect current branch and load state ---
-  currentBranchKey = getBranchKey()
+  currentBranchKey = branchKey()
   outputLog.appendLine(`[Crit] Current branch key: ${currentBranchKey}`)
 
   try {

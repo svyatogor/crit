@@ -31,6 +31,41 @@ async function activateGit(): Promise<boolean> {
   }
 }
 
+/**
+ * Run `setup` with the Git API, now or once the Git extension activates.
+ *
+ * Crit can activate before the Git extension does. Reading `getGitApi()` once
+ * at startup then finds nothing and wires up nothing until the window reloads:
+ * the changed-file list stays empty, and branch-scoped state is read from the
+ * wrong bucket.
+ *
+ * `setup` returns the array it keeps its subscriptions in. The array itself is
+ * held, not a copy, because `setup` keeps adding to it as repositories open.
+ */
+export function whenGitReady(setup: (git: API) => vscode.Disposable[]): vscode.Disposable {
+  let subscriptions: vscode.Disposable[] = []
+  let disposed = false
+
+  const run = (git: API) => {
+    subscriptions = setup(git)
+  }
+
+  const git = getGitApi()
+  if (git) {
+    run(git)
+  } else {
+    void activateGit().then((ready) => {
+      const api = ready ? getGitApi() : undefined
+      if (!disposed && api) run(api)
+    })
+  }
+
+  return new vscode.Disposable(() => {
+    disposed = true
+    for (const subscription of subscriptions) subscription.dispose()
+  })
+}
+
 // --------------- Repository identity ---------------
 
 /**
@@ -79,6 +114,51 @@ export function repoRef(repo: Repository): string {
 /** The checked-out branch, or a stand-in when HEAD is detached. */
 export function repoBranch(repo: Repository): string {
   return repo.state.HEAD?.name || '_detached'
+}
+
+/**
+ * Key for the comment threads of the current branch, `<repo>.<branch>`, or
+ * `_default` while no repository is known. Reads the first repository only.
+ */
+export function branchKey(git = getGitApi()): string {
+  const repo = git?.repositories[0]
+  if (!repo) return '_default'
+  return `${path.basename(repo.rootUri.fsPath)}.${repoBranch(repo)}`
+}
+
+/**
+ * Report `branchKey()` now, and again each time it changes.
+ *
+ * It is rechecked when the Git extension finishes activating, when a repository
+ * opens, and when a repository's state changes. A repository can be announced
+ * with HEAD already resolved, so no `state.onDidChange` follows it; checking on
+ * open covers that case.
+ */
+export function watchBranchKey(listener: (key: string) => void): vscode.Disposable {
+  let current = branchKey()
+  listener(current)
+
+  return whenGitReady((git) => {
+    const subscriptions: vscode.Disposable[] = []
+    const report = () => {
+      const key = branchKey(git)
+      if (key === current) return
+      current = key
+      listener(key)
+    }
+    const watch = (repo: Repository) => subscriptions.push(repo.state.onDidChange(report))
+
+    for (const repo of git.repositories) watch(repo)
+    subscriptions.push(
+      git.onDidOpenRepository((repo) => {
+        watch(repo)
+        report()
+      }),
+    )
+    // Activation can land after the startup read above.
+    report()
+    return subscriptions
+  })
 }
 
 // --------------- Changed files ---------------
@@ -204,38 +284,25 @@ export function headUri(uri: vscode.Uri): vscode.Uri | undefined {
  * file save — so callers are expected to debounce.
  */
 export function onChangedFilesChanged(listener: () => void): vscode.Disposable {
-  const subscriptions: vscode.Disposable[] = []
-  const git = getGitApi()
+  // Until the Git extension activates, the changed-file list is empty with
+  // nothing to refill it. Firing once it is ready is the difference between a
+  // sidebar that fills itself in and one that looks broken until the user finds
+  // the refresh button.
+  const startedLate = !getGitApi()
 
-  if (!git) {
-    // The Git extension has not activated yet, which leaves the changed-file
-    // list empty with nothing to ever refill it. Activating it and wiring up
-    // afterwards is the difference between a sidebar that fills itself in and
-    // one that looks broken until the user finds the refresh button.
-    let cancelled = false
-    void activateGit().then((ready) => {
-      if (cancelled || !ready) return
-      subscriptions.push(onChangedFilesChanged(listener))
-      listener()
-    })
-    return new vscode.Disposable(() => {
-      cancelled = true
-      for (const subscription of subscriptions) subscription.dispose()
-    })
-  }
-
-  const watch = (repo: Repository) => subscriptions.push(repo.state.onDidChange(listener))
-  for (const repo of git.repositories) watch(repo)
-  subscriptions.push(
-    git.onDidOpenRepository((repo) => {
-      watch(repo)
-      listener()
-    }),
-  )
-  subscriptions.push(git.onDidCloseRepository(listener))
-
-  return new vscode.Disposable(() => {
-    for (const subscription of subscriptions) subscription.dispose()
+  return whenGitReady((git) => {
+    const subscriptions: vscode.Disposable[] = []
+    const watch = (repo: Repository) => subscriptions.push(repo.state.onDidChange(listener))
+    for (const repo of git.repositories) watch(repo)
+    subscriptions.push(
+      git.onDidOpenRepository((repo) => {
+        watch(repo)
+        listener()
+      }),
+    )
+    subscriptions.push(git.onDidCloseRepository(listener))
+    if (startedLate) listener()
+    return subscriptions
   })
 }
 
