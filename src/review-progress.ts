@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as vscode from 'vscode'
-import { getChangedFiles, getGitApi, repoBranch, repoForUri, repoRef } from './git'
+import { getChangedFiles, getGitApi, repoBranch, repoForUri, repoRef, whenGitReady } from './git'
 import type { Repository } from './vscode-git'
 import { bucketKey, type FileProbe, NO_REPO_BUCKET, ReviewedFiles } from './reviewed-files'
 
@@ -111,13 +111,20 @@ export function createReviewProgress(context: vscode.ExtensionContext, log: vsco
     }
   }
 
-  const git = getGitApi()
-  if (git) {
-    for (const repo of git.repositories) trackRepo(repo)
-    subscriptions.push(git.onDidOpenRepository(trackRepo))
-  } else {
-    log.appendLine('[Crit] Git API not available — reviewed marks fall back to a single unbranched bucket')
+  const startedLate = !getGitApi()
+  if (startedLate) {
+    log.appendLine('[Crit] Git API not ready — reviewed marks use the unbranched bucket until it activates')
   }
+  subscriptions.push(
+    whenGitReady((git) => {
+      for (const repo of git.repositories) trackRepo(repo)
+      const opened = git.onDidOpenRepository(trackRepo)
+      // Marks are keyed by branch, so the view must re-read them now that the
+      // branch is known.
+      if (startedLate) emitter.fire()
+      return [opened]
+    }),
+  )
 
   void collect()
 
